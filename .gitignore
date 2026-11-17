@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+artifacts/
+.tools/
+.codex/
+.qa/
+.vs/
+*.user
+*.suo
+TestResults/
