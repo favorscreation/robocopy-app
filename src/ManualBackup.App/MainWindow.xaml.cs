@@ -16,19 +16,22 @@ namespace ManualBackup.App;
 public partial class MainWindow : Window, INotifyPropertyChanged
 {
     private readonly SettingsStore _store = new();
-    private readonly BackupEngine _engine = new();
+    private readonly MultiRestoreEngine _restoreEngine = new();
     private readonly MultiBackupEngine _multiEngine = new();
     private ObservableCollection<BackupSourceEntry>? _observedSourceCollection;
     private readonly HashSet<BackupSourceEntry> _observedSources = [];
     private readonly HashSet<BackupSourceEntry> _pendingSourceNames = [];
     private BackupSourceEntry? _selectedSourceEntry;
+    private ObservableCollection<RestoreFolderEntry>? _observedRestoreCollection;
+    private readonly HashSet<RestoreFolderEntry> _observedRestoreEntries = [];
+    private RestoreFolderEntry? _selectedRestoreEntry;
     private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromMilliseconds(650) };
     private CancellationTokenSource? _cancellation;
     private BackupProfile? _selectedProfile;
     private bool _isBusy;
     private bool _closeAfterWork;
     private bool _isRestore;
-    private BackupPlan? _reviewedRestorePlan;
+    private MultiRestorePlan? _reviewedRestorePlan;
     private string? _lastLogPath;
     private string? _currentLogPath;
     private string _newCount = "—", _updatedCount = "—", _unchangedCount = "—", _totalSize = "—";
@@ -52,13 +55,16 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             _selectedProfile = value;
             if (value is not null) value.PropertyChanged += Profile_PropertyChanged;
             ObserveSourceFolders(); SelectedSourceEntry = null;
+            ObserveRestoreFolders(); SelectedRestoreEntry = value?.RestoreFolders.FirstOrDefault();
             Notify(); NotifyActivePaths(); ClearPreview();
         }
     }
-    public bool IsBusy { get => _isBusy; private set { _isBusy = value; Notify(); Notify(nameof(CanEdit)); Notify(nameof(CanRun)); Notify(nameof(CanExecute)); Notify(nameof(CanRemoveSource)); } }
+    public bool IsBusy { get => _isBusy; private set { _isBusy = value; Notify(); Notify(nameof(CanEdit)); Notify(nameof(CanRun)); Notify(nameof(CanExecute)); Notify(nameof(CanRemoveSource)); Notify(nameof(CanRemoveRestore)); } }
     public bool CanEdit => !IsBusy;
-    public bool CanRun => !IsBusy && SelectedProfile is not null && !string.IsNullOrWhiteSpace(ActiveDestinationPath) &&
-        (IsRestore ? !string.IsNullOrWhiteSpace(ActiveSourcePath) : SelectedProfile.SourceFolders.Count > 0 &&
+    public bool CanRun => !IsBusy && SelectedProfile is not null &&
+        (IsRestore ? SelectedProfile.RestoreFolders.Count > 0 && SelectedProfile.RestoreFolders.All(entry =>
+            !string.IsNullOrWhiteSpace(entry.SourcePath) && !string.IsNullOrWhiteSpace(entry.DestinationPath)) :
+            !string.IsNullOrWhiteSpace(ActiveDestinationPath) && SelectedProfile.SourceFolders.Count > 0 &&
             SelectedProfile.SourceFolders.All(s => !string.IsNullOrWhiteSpace(s.SourcePath)) &&
             (SelectedProfile.SourceFolders.Count == 1 || SelectedProfile.SourceFolders.All(s => !string.IsNullOrWhiteSpace(s.TargetFolderName))));
     public bool CanExecute => CanRun && (!IsRestore || _reviewedRestorePlan is { SkippedPaths.Count: 0 });
@@ -70,23 +76,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             if (_isRestore == value || IsBusy) return;
             _isRestore = value;
             Notify(); Notify(nameof(IsBackup));
-            foreach (var name in new[] { nameof(ModeTitle), nameof(ModeDescription), nameof(SourceLabel), nameof(DestinationLabel), nameof(SourceFieldName), nameof(DestinationFieldName), nameof(SourceTip), nameof(DestinationTip), nameof(OperationWarning), nameof(ActionInstruction), nameof(RunButtonText), nameof(RunTip), nameof(OpenDestinationText), nameof(UpdateCountLabel), nameof(BackupSourcesVisibility), nameof(RestoreSourceVisibility) }) Notify(name);
+            foreach (var name in new[] { nameof(ModeTitle), nameof(SourceLabel), nameof(DestinationLabel), nameof(SourceFieldName), nameof(DestinationFieldName), nameof(SourceTip), nameof(DestinationTip), nameof(OperationWarning), nameof(RunButtonText), nameof(RunTip), nameof(OpenDestinationText), nameof(UpdateCountLabel), nameof(BackupSourcesVisibility), nameof(RestoreSourceVisibility) }) Notify(name);
             NotifyActivePaths(); ClearPreview();
         }
     }
     public bool IsBackup { get => !IsRestore; set { if (value) IsRestore = false; } }
     public string ActiveSourcePath
     {
-        get => SelectedProfile?.RestoreSourcePath ?? "";
-        set { if (SelectedProfile is null || IsBusy || !IsRestore) return; SelectedProfile.RestoreSourcePath = value; }
+        get => SelectedRestoreEntry?.SourcePath ?? "";
+        set { if (SelectedProfile is null || IsBusy || !IsRestore) return; EnsureRestoreEntry().SourcePath = value; }
     }
     public string ActiveDestinationPath
     {
-        get => (IsRestore ? SelectedProfile?.RestoreDestinationPath : SelectedProfile?.DestinationPath) ?? "";
-        set { if (SelectedProfile is null || IsBusy) return; if (IsRestore) SelectedProfile.RestoreDestinationPath = value; else SelectedProfile.DestinationPath = value; }
+        get => (IsRestore ? SelectedRestoreEntry?.DestinationPath : SelectedProfile?.DestinationPath) ?? "";
+        set { if (SelectedProfile is null || IsBusy) return; if (IsRestore) EnsureRestoreEntry().DestinationPath = value; else SelectedProfile.DestinationPath = value; }
     }
-    public string ModeTitle => IsRestore ? "差分を確認して復元" : "手動差分バックアップ";
-    public string ModeDescription => IsRestore ? "復元元のフォルダーから、復元先へ追加・変更されたファイルを書き戻します。" : "複数のコピー元をまとめて、追加・変更されたファイルだけ保存します。";
+    public string ModeTitle => IsRestore ? "復元" : "バックアップ";
     public string SourceLabel => IsRestore ? "復元元" : "コピー元";
     public string DestinationLabel => IsRestore ? "復元先" : "保存先";
     public string SourceFieldName => SourceLabel + "フォルダー";
@@ -94,7 +99,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public string SourceTip => IsRestore ? "復元したい内容があるフォルダー（バックアップ先など）" : "バックアップしたいフォルダー";
     public string DestinationTip => IsRestore ? "ファイルを書き戻すフォルダー。同名ファイルは上書きされます。" : "バックアップ専用のフォルダーを選んでください";
     public string OperationWarning => IsRestore ? "復元先の同名ファイルを上書きします。復元先だけにあるファイルは残します。実行前に内容を照合します。" : "保存先の既存ファイルは同名の更新時に上書きします。元で削除したファイルは保存先に残ります。";
-    public string ActionInstruction => IsRestore ? "差分の確認後に復元" : "差分を確認して、実行";
     public string RunButtonText => IsRestore ? "復元を実行" : "バックアップを実行";
     public string OpenDestinationText => IsRestore ? "復元先を開く" : "保存先を開く";
     public string UpdateCountLabel => IsRestore ? "上書き" : "更新";
@@ -110,6 +114,19 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         set { _selectedSourceEntry = value; Notify(); Notify(nameof(CanRemoveSource)); }
     }
     public bool CanRemoveSource => CanEdit && SelectedSourceEntry is not null;
+    public RestoreFolderEntry? SelectedRestoreEntry
+    {
+        get => _selectedRestoreEntry;
+        set { _selectedRestoreEntry = value; Notify(); Notify(nameof(CanRemoveRestore)); NotifyActivePaths(); }
+    }
+    public bool CanRemoveRestore => CanEdit && SelectedRestoreEntry is not null;
+    private RestoreFolderEntry EnsureRestoreEntry()
+    {
+        if (SelectedRestoreEntry is not null) return SelectedRestoreEntry;
+        var entry = new RestoreFolderEntry();
+        SelectedProfile!.RestoreFolders.Add(entry); SelectedRestoreEntry = entry;
+        return entry;
+    }
     private void NotifyActivePaths()
     {
         Notify(nameof(ActiveSourcePath)); Notify(nameof(ActiveDestinationPath)); Notify(nameof(CanRun)); Notify(nameof(CanExecute)); Notify(nameof(BackupLayoutHint));
@@ -144,6 +161,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void Profile_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(BackupProfile.SourceFolders)) { ObserveSourceFolders(); ClearPreview(); NotifyActivePaths(); }
+        if (e.PropertyName == nameof(BackupProfile.RestoreFolders)) { ObserveRestoreFolders(); SelectedRestoreEntry = SelectedProfile?.RestoreFolders.FirstOrDefault(); ClearPreview(); NotifyActivePaths(); }
         if (e.PropertyName is nameof(BackupProfile.SourcePath) or nameof(BackupProfile.DestinationPath) or nameof(BackupProfile.RestoreSourcePath) or nameof(BackupProfile.RestoreDestinationPath) or nameof(BackupProfile.MaxParallelSources)) { ClearPreview(); NotifyActivePaths(); }
         _saveTimer.Stop(); _saveTimer.Start();
     }
@@ -166,6 +184,68 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void SourceEntry_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         ClearPreview(); NotifyActivePaths(); _saveTimer.Stop(); _saveTimer.Start();
+    }
+    private void ObserveRestoreFolders()
+    {
+        if (_observedRestoreCollection is not null) _observedRestoreCollection.CollectionChanged -= RestoreFolders_CollectionChanged;
+        foreach (var entry in _observedRestoreEntries) entry.PropertyChanged -= SourceEntry_PropertyChanged;
+        _observedRestoreEntries.Clear();
+        _observedRestoreCollection = SelectedProfile?.RestoreFolders;
+        if (_observedRestoreCollection is null) return;
+        _observedRestoreCollection.CollectionChanged += RestoreFolders_CollectionChanged;
+        foreach (var entry in _observedRestoreCollection)
+            if (_observedRestoreEntries.Add(entry)) entry.PropertyChanged += SourceEntry_PropertyChanged;
+    }
+    private void RestoreFolders_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        ObserveRestoreFolders();
+        if (SelectedRestoreEntry is not null && SelectedProfile?.RestoreFolders.Contains(SelectedRestoreEntry) != true)
+            SelectedRestoreEntry = SelectedProfile?.RestoreFolders.FirstOrDefault();
+        ClearPreview(); NotifyActivePaths(); _saveTimer.Stop(); _saveTimer.Start();
+    }
+    private void AddRestoreRow_Click(object sender, RoutedEventArgs e)
+    {
+        if (!CanEdit || SelectedProfile is null) return;
+        var entry = new RestoreFolderEntry();
+        SelectedProfile.RestoreFolders.Add(entry); SelectedRestoreEntry = entry;
+        RestoreFoldersGrid.ScrollIntoView(entry);
+    }
+    private void ImportRestoreRows_Click(object sender, RoutedEventArgs e)
+    {
+        if (!CanEdit || SelectedProfile is null) return;
+        if (string.IsNullOrWhiteSpace(SelectedProfile.DestinationPath) || SelectedProfile.SourceFolders.Count == 0 ||
+            SelectedProfile.SourceFolders.Any(entry => string.IsNullOrWhiteSpace(entry.SourcePath) ||
+                (SelectedProfile.SourceFolders.Count > 1 && string.IsNullOrWhiteSpace(entry.TargetFolderName))))
+        {
+            MessageBox.Show(this, "バックアップのコピー元・保存先・保存先フォルダー名を先に設定してください。", "復元の組を追加");
+            return;
+        }
+        foreach (var source in SelectedProfile.SourceFolders)
+        {
+            var sourcePath = string.IsNullOrWhiteSpace(source.TargetFolderName) ? SelectedProfile.DestinationPath.Trim() :
+                Path.Combine(SelectedProfile.DestinationPath.Trim(), source.TargetFolderName);
+            if (SelectedProfile.RestoreFolders.Any(entry => string.Equals(entry.SourcePath, sourcePath, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(entry.DestinationPath, source.SourcePath, StringComparison.OrdinalIgnoreCase))) continue;
+            var entry = new RestoreFolderEntry { SourcePath = sourcePath, DestinationPath = source.SourcePath };
+            SelectedProfile.RestoreFolders.Add(entry); SelectedRestoreEntry = entry;
+        }
+    }
+    private void RemoveRestoreRow_Click(object sender, RoutedEventArgs e)
+    {
+        if (!CanRemoveRestore || SelectedProfile is null || SelectedRestoreEntry is null) return;
+        SelectedProfile.RestoreFolders.Remove(SelectedRestoreEntry);
+    }
+    private void BrowseRestoreSource_Click(object sender, RoutedEventArgs e) => BrowseRestoreFolder(sender, true);
+    private void BrowseRestoreDestination_Click(object sender, RoutedEventArgs e) => BrowseRestoreFolder(sender, false);
+    private void BrowseRestoreFolder(object sender, bool source)
+    {
+        if (!CanEdit || sender is not FrameworkElement { DataContext: RestoreFolderEntry entry }) return;
+        SelectedRestoreEntry = entry;
+        var picker = new OpenFolderDialog { Title = source ? "復元元フォルダーを選択" : "復元先フォルダーを選択" };
+        var current = source ? entry.SourcePath : entry.DestinationPath;
+        if (Directory.Exists(current)) picker.InitialDirectory = current;
+        if (picker.ShowDialog(this) != true) return;
+        if (source) entry.SourcePath = picker.FolderName; else entry.DestinationPath = picker.FolderName;
     }
     private static string DefaultTargetName(string source)
     {
@@ -257,8 +337,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var profile = SelectedProfile;
         var restore = IsRestore;
         var operation = restore ? "復元" : "バックアップ";
-        var source = restore ? ActiveSourcePath.Trim() : string.Join(Environment.NewLine, profile.SourceFolders.Select(s => s.SourcePath + " → " + (string.IsNullOrWhiteSpace(s.TargetFolderName) ? "保存先直下" : s.TargetFolderName)));
-        var destination = ActiveDestinationPath.Trim();
+        var source = restore ? string.Join(Environment.NewLine, profile.RestoreFolders.Select((entry, index) => $"[{index + 1}] {entry.SourcePath} → {entry.DestinationPath}")) : string.Join(Environment.NewLine, profile.SourceFolders.Select(s => s.SourcePath + " → " + (string.IsNullOrWhiteSpace(s.TargetFolderName) ? "保存先直下" : s.TargetFolderName)));
+        var destination = restore ? $"{profile.RestoreFolders.Count} 組（上記の対応先）" : ActiveDestinationPath.Trim();
         SaveSettings(); IsBusy = true; IsScanning = true; ProgressPercent = 0;
         StatusText = restore && execute ? "復元の実行を確認してください。" : restore ? "ファイル内容を照合して、復元の差分を確認しています…" : "フォルダーの差分を確認しています…";
         DetailText = "この段階では保存先のファイルを変更しません。";
@@ -266,7 +346,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _currentLogPath = null;
         try
         {
-            BackupPlan? plan = null;
+            MultiRestorePlan? plan = null;
             MultiBackupPlan? multiPlan = null;
             IReadOnlyList<BackupFile> files = [];
             IReadOnlyList<BackupIssue> skippedPaths = [];
@@ -278,10 +358,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 files = plan.Files; skippedPaths = plan.SkippedPaths; unchangedFiles = plan.UnchangedFiles; totalBytes = plan.TotalBytes;
                 var added = plan.Files.Count(f => f.Kind == BackupChangeKind.New);
                 var overwritten = plan.Files.Count(f => f.Kind == BackupChangeKind.Updated);
-                var answer = MessageBox.Show(this,
-                    $"確認した差分を復元します。復元先の同名ファイルは上書きされます。\n\n復元元:\n{plan.SourcePath}\n\n復元先:\n{plan.DestinationPath}\n\n追加 {added:N0} 件 / 上書き {overwritten:N0} 件 / {FormatSize(plan.TotalBytes)}\n復元先だけにあるファイルは残します。\n\n復元を実行しますか？",
-                    "復元先への上書きを確認", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
-                if (answer != MessageBoxResult.Yes)
+                var confirmation = new RestoreConfirmationWindow(plan) { Owner = this };
+                if (confirmation.ShowDialog() != true)
                 {
                     StatusText = "復元の実行を取り消しました。";
                     DetailText = "差分確認の結果は保持しています。内容を変更した場合は差分を確認し直してください。";
@@ -289,7 +367,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 }
                 _reviewedRestorePlan = null; Notify(nameof(CanExecute));
                 _cancellation.Token.ThrowIfCancellationRequested();
-                LogText = ""; BeginLog("復元実行", profile, plan.SourcePath, plan.DestinationPath);
+                LogText = ""; BeginLog("復元実行", profile, source, destination);
                 AddLog($"確認済みの差分: 追加 {added:N0} / 上書き {overwritten:N0} / 変更なし {plan.UnchangedFiles:N0} / 容量 {FormatSize(plan.TotalBytes)}");
             }
             else
@@ -298,7 +376,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 LogText = ""; BeginLog(execute ? "バックアップ実行" : operation + " 差分確認", profile, source, destination);
                 if (restore)
                 {
-                    plan = await _engine.CreatePlanAsync(new BackupRequest(source, destination, FileComparisonMode.Content), _cancellation.Token);
+                    var pairs = profile.RestoreFolders.Select(entry => new RestoreFolderPair(entry.SourcePath.Trim(), entry.DestinationPath.Trim())).ToArray();
+                    plan = await _restoreEngine.CreatePlanAsync(pairs, _cancellation.Token);
                     files = plan.Files; skippedPaths = plan.SkippedPaths; unchangedFiles = plan.UnchangedFiles; totalBytes = plan.TotalBytes;
                 }
                 else
@@ -332,7 +411,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 DetailText = p.RelativePath;
             });
             var result = restore
-                ? await _engine.ExecuteAsync(plan!, progress, _cancellation.Token)
+                ? await _restoreEngine.ExecuteAsync(plan!, progress, _cancellation.Token)
                 : await _multiEngine.ExecuteAsync(multiPlan!, progress, _cancellation.Token);
             progress.Dispose();
             await AddIssuesAsync("エラー", result.Errors);
@@ -377,7 +456,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         var logDirectory = Path.Combine(_store.DataDirectory, "Logs");
         Directory.CreateDirectory(logDirectory);
         _currentLogPath = Path.Combine(logDirectory, DateTime.Now.ToString("yyyyMMdd-HHmmss-fff") + "-" + Guid.NewGuid().ToString("N")[..6] + ".log");
-        File.WriteAllText(_currentLogPath, "Backup Desk 1.3\n", new UTF8Encoding(true));
+        File.WriteAllText(_currentLogPath, "Backup Desk 1.4.0\n", new UTF8Encoding(true));
         _lastLogPath = _currentLogPath; Notify(nameof(HasLog));
         AddLog(action + " — " + profile.Name);
         AddLog(SourceLabel + ": " + source); AddLog(DestinationLabel + ": " + destination);
@@ -425,7 +504,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     }
     private void Help_Click(object sender, RoutedEventArgs e) => MessageBox.Show(this,
         "【同時実行】\n「同時実行数」で1～8を選べます。初期値は2、1は順次実行です。コピー元フォルダーを並列に処理し、1フォルダー内のファイルと差分確認は順次処理します。同じドライブでは、数を増やすと遅くなる場合もあります。設定はフォルダー設定ごとに保存します。\n\n中止すると、処理中のコピーが停止するまで待ちます。完了済みのファイルは残り、エラーがあっても他のコピー元の結果を含めてログに表示します。\n\n" +
-        "【バックアップ】\n「フォルダー追加…」で複数のコピー元を選択します。「パスを入力」から一覧へ直接入力することもできます。共通の保存先を指定し、「差分を確認」→「バックアップを実行」を押します。\n\n各コピー元の中身を「保存先\\保存先フォルダー名」へ保存します。保存先フォルダー名は一覧で編集でき、複数指定ではすべて別の名前にしてください。従来の1件設定で保存先名が空欄の場合は、保存先直下を維持します。複数に増やす際は空欄を埋めてください。既存の保存データは移動しません。\n\nサイズまたは更新日時が異なるファイルだけを保存します。一覧からの削除は設定だけで、ファイルは消しません。\n\n【復元】\n上部の「復元」を選び、復元元と復元先を指定します。複数コピー元のバックアップから戻すときは、対応する保存先の子フォルダーを復元元に選びます。\n1. 「差分を確認」で内容（SHA-256）も照合します。\n2. 追加・上書き対象を確認します。\n3. 「復元を実行」でパスと件数を確認します。古い日時の内容も差分があれば上書きします。\n\n書き込み先だけのファイルは残し、世代は保持しません。復元で対象外の項目があればログを確認して解消してください。確認後に編集した場合は再確認が必要です。復元中は関連アプリを閉じ、ファイルを編集しないでください。途中のエラー・中止では完了済みのコピーが残ります。\n\nバックアップと復元のパスは別々に自動保存します。リンク・ジャンクション・OneDriveの再解析ポイントは対象外です。\n\n設定・ログ: " + _store.DataDirectory,
+        "【バックアップ】\n「フォルダー追加…」で複数のコピー元を選択します。「パスを入力」から一覧へ直接入力することもできます。共通の保存先を指定し、「差分を確認」→「バックアップを実行」を押します。\n\n各コピー元の中身を「保存先\\保存先フォルダー名」へ保存します。保存先フォルダー名は一覧で編集でき、複数指定ではすべて別の名前にしてください。従来の1件設定で保存先名が空欄の場合は、保存先直下を維持します。複数に増やす際は空欄を埋めてください。既存の保存データは移動しません。\n\nサイズまたは更新日時が異なるファイルだけを保存します。一覧からの削除は設定だけで、ファイルは消しません。\n\n【復元】\n上部の「復元」を選び、「組を追加」で復元元と復元先を1行ずつ指定します。各行の「参照…」から選択できます。「バックアップ設定から追加」で現在の設定の保存先→コピー元の対応を追加できます。各行の中身を行順に復元します。\n1. 「差分を確認」で内容（SHA-256）も照合します。\n2. 追加・上書き対象を確認します。\n3. 「復元を実行」で全組のパスと件数を確認します。古い日時の内容も差分があれば上書きします。\n\n書き込み先だけのファイルは残し、世代は保持しません。復元で対象外の項目があればログを確認して解消してください。復元元同士・復元先同士の重複や親子関係、別の復元元と重なる復元先は指定できません。確認後に編集した場合は再確認が必要です。全組を再照合してから書き込み、処理中にエラーが起きた場合は後続の組を停止します。復元中は関連アプリを閉じ、ファイルを編集しないでください。途中のエラー・中止では完了済みのコピーが残ります。\n\nバックアップと復元のパスは別々に自動保存します。リンク・ジャンクション・OneDriveの再解析ポイントは対象外です。\n\n設定・ログ: " + _store.DataDirectory,
         "Backup Desk の使い方", MessageBoxButton.OK, MessageBoxImage.Information);
     private void Window_Closing(object? sender, CancelEventArgs e)
     {

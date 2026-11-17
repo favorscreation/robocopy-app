@@ -49,7 +49,7 @@ public sealed partial class BackupEngine
             throw new IOException("差分確認後にファイルの有無・内容・更新日時が変わりました。上書きを中止しました。もう一度差分を確認してください。");
     }
 
-    private static List<BackupIssue> ValidateContentPlan(BackupPlan plan, CancellationToken token)
+    internal static List<BackupIssue> ValidateContentPlan(BackupPlan plan, CancellationToken token)
     {
         var issues = new List<BackupIssue>();
         foreach (var directory in plan.Directories)

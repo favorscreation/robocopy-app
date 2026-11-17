@@ -2,6 +2,13 @@ using ManualBackup.Core;
 
 var tests = new (string Name, Func<Task> Run)[]
 {
+    ("Paired restore keeps same-name files isolated and aggregates content differences", MultiRestoreScenarios.RoundTrip),
+    ("Paired restore validates every later source and destination before any writes", MultiRestoreScenarios.StaleLaterRow),
+    ("Paired restore rejects overlapping targets and cross-row source writes", MultiRestoreScenarios.Overlaps),
+    ("Paired restore refuses missing sources and unreviewable rows", MultiRestoreScenarios.InvalidRows),
+    ("Paired restore cancellation retains completed rows and preserves active originals", MultiRestoreScenarios.Cancellation),
+    ("Paired restore acquires every destination lock before any writes", MultiRestoreScenarios.Locks),
+    ("Paired restore stops later rows on copy errors and observer failures", MultiRestoreScenarios.PartialFailure),
     ("Parallel limit one retains serial copying with one actual active staging file", ParallelScenarios.SerialLimit),
     ("Parallel limit two copies two real sources simultaneously and respects its cap", ParallelScenarios.TwoSourcesAtOnce),
     ("Parallel limit four copies four real sources simultaneously and respects its cap", ParallelScenarios.FourSourcesAtOnce),

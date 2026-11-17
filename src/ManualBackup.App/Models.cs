@@ -19,6 +19,16 @@ public sealed class BackupSourceEntry : INotifyPropertyChanged
     private void OnChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
+public sealed class RestoreFolderEntry : INotifyPropertyChanged
+{
+    private string _sourcePath = "";
+    private string _destinationPath = "";
+    public string SourcePath { get => _sourcePath; set { _sourcePath = value; OnChanged(); } }
+    public string DestinationPath { get => _destinationPath; set { _destinationPath = value; OnChanged(); } }
+    public event PropertyChangedEventHandler? PropertyChanged;
+    private void OnChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+}
+
 public sealed class BackupProfile : INotifyPropertyChanged
 {
     public const int DefaultMaxParallelSources = 2;
@@ -32,6 +42,7 @@ public sealed class BackupProfile : INotifyPropertyChanged
     private string _restoreSourcePath = "";
     private string _restoreDestinationPath = "";
     private string _restoreLastRun = "未実行";
+    private ObservableCollection<RestoreFolderEntry> _restoreFolders = [];
     public string Name { get => _name; set { _name = value; OnChanged(); } }
     public string SourcePath { get => _sourcePath; set { _sourcePath = value; OnChanged(); } }
     public ObservableCollection<BackupSourceEntry> SourceFolders { get => _sourceFolders; set { _sourceFolders = value; SourceFoldersWasSet = true; OnChanged(); } }
@@ -53,6 +64,8 @@ public sealed class BackupProfile : INotifyPropertyChanged
     public string RestoreSourcePath { get => _restoreSourcePath; set { _restoreSourcePath = value; OnChanged(); } }
     public string RestoreDestinationPath { get => _restoreDestinationPath; set { _restoreDestinationPath = value; OnChanged(); } }
     public string RestoreLastRun { get => _restoreLastRun; set { _restoreLastRun = value; OnChanged(); } }
+    public ObservableCollection<RestoreFolderEntry> RestoreFolders { get => _restoreFolders; set { _restoreFolders = value; RestoreFoldersWasSet = true; OnChanged(); } }
+    internal bool RestoreFoldersWasSet { get; private set; }
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
@@ -111,6 +124,18 @@ public sealed class SettingsStore
                 profile.LastRun ??= "未実行";
                 profile.RestoreSourcePath ??= "";
                 profile.RestoreDestinationPath ??= "";
+                var migrateLegacyRestore = !profile.RestoreFoldersWasSet || profile.RestoreFolders is null;
+                profile.RestoreFolders ??= [];
+                if (profile.RestoreFolders.Any(entry => entry is null))
+                    throw new InvalidDataException("復元フォルダーの設定に不正な項目があります。");
+                foreach (var entry in profile.RestoreFolders)
+                {
+                    entry.SourcePath ??= "";
+                    entry.DestinationPath ??= "";
+                }
+                if (migrateLegacyRestore && profile.RestoreFolders.Count == 0 &&
+                    (!string.IsNullOrWhiteSpace(profile.RestoreSourcePath) || !string.IsNullOrWhiteSpace(profile.RestoreDestinationPath)))
+                    profile.RestoreFolders.Add(new RestoreFolderEntry { SourcePath = profile.RestoreSourcePath, DestinationPath = profile.RestoreDestinationPath });
                 profile.RestoreLastRun ??= "未実行";
                 if (string.IsNullOrWhiteSpace(profile.Id)) profile.Id = Guid.NewGuid().ToString("N");
             }

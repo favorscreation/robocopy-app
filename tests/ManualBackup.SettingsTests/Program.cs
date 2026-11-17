@@ -5,6 +5,9 @@ using ManualBackup.App;
 
 var cases = new (string Name, Action Run)[]
 {
+    ("Legacy restore paths migrate to one paired row exactly once", RestoreMigration),
+    ("Restore pairs persist independently and explicit empty lists stay empty", RestoreRoundTrip),
+    ("Null restore rows are rejected and null path strings are normalized", RestoreInvalidRows),
     ("Legacy single source migrates with direct destination mapping", LegacyMigration),
     ("Null source collection migrates legacy path", NullCollectionMigration),
     ("Explicit empty source collection suppresses stale legacy path", ExplicitEmpty),
@@ -29,6 +32,62 @@ foreach (var test in cases)
 }
 Console.WriteLine($"{cases.Length - failed} passed, {failed} failed ({cases.Length} settings tests). Temporary fixtures cleaned.");
 return failed == 0 ? 0 : 1;
+
+static void RestoreMigration()
+{
+    using var fixture = new Fixture();
+    foreach (var optional in new[] { "", ",\"RestoreFolders\":null" })
+    {
+        fixture.Write("{\"Profiles\":[{\"RestoreSourcePath\":\"E:\\\\Backup\",\"RestoreDestinationPath\":\"C:\\\\Work\"" + optional + "}]}");
+        var settings = fixture.Store.Load(out var warning);
+        Equal<string?>(null, warning, "restore migration warning");
+        var profile = settings.Profiles.Single();
+        Equal(1, profile.RestoreFolders.Count, "one migrated pair");
+        Equal(profile.RestoreSourcePath, profile.RestoreFolders[0].SourcePath, "migrated source");
+        Equal(profile.RestoreDestinationPath, profile.RestoreFolders[0].DestinationPath, "migrated destination");
+        fixture.Store.Save([profile], profile.Id);
+        Equal(1, fixture.Store.Load(out _).Profiles.Single().RestoreFolders.Count, "no duplicate migration");
+    }
+}
+
+static void RestoreRoundTrip()
+{
+    using var fixture = new Fixture();
+    var profile = new BackupProfile
+    {
+        DestinationPath = @"E:\Backup", RestoreSourcePath = @"E:\Stale", RestoreDestinationPath = @"C:\Stale",
+        RestoreFolders = [new() { SourcePath = @"E:\Backup\A", DestinationPath = @"C:\A" }, new() { SourcePath = @"F:\B", DestinationPath = @"D:\B" }]
+    };
+    fixture.Store.Save([profile], profile.Id);
+    var loaded = fixture.Store.Load(out var warning).Profiles.Single();
+    Equal<string?>(null, warning, "paired roundtrip warning");
+    True(profile.RestoreFolders.Select(entry => (entry.SourcePath, entry.DestinationPath)).SequenceEqual(loaded.RestoreFolders.Select(entry => (entry.SourcePath, entry.DestinationPath))), "ordered pairs preserved");
+    Equal(profile.DestinationPath, loaded.DestinationPath, "backup path independent");
+    loaded.RestoreFolders.Clear();
+    fixture.Store.Save([loaded], loaded.Id);
+    Equal(0, fixture.Store.Load(out _).Profiles.Single().RestoreFolders.Count, "deleted restore rows never resurrect");
+    var notifications = new List<string?>();
+    profile.PropertyChanged += (_, e) => notifications.Add(e.PropertyName);
+    profile.RestoreFolders = [];
+    True(notifications.Contains(nameof(BackupProfile.RestoreFolders)), "replacement notifies");
+    var row = new RestoreFolderEntry();
+    row.PropertyChanged += (_, e) => notifications.Add(e.PropertyName);
+    row.SourcePath = "source"; row.DestinationPath = "target";
+    True(notifications.Contains(nameof(RestoreFolderEntry.SourcePath)) && notifications.Contains(nameof(RestoreFolderEntry.DestinationPath)), "row edits notify");
+}
+
+static void RestoreInvalidRows()
+{
+    using var fixture = new Fixture();
+    fixture.Write("""{"Profiles":[{"RestoreFolders":[{"SourcePath":null,"DestinationPath":null}]}]}""");
+    var profile = fixture.Store.Load(out var warning).Profiles.Single();
+    Equal<string?>(null, warning, "null paths normalized");
+    Equal("", profile.RestoreFolders.Single().SourcePath, "null source");
+    Equal("", profile.RestoreFolders.Single().DestinationPath, "null destination");
+    fixture.Write("""{"Profiles":[{"RestoreFolders":[null]}]}""");
+    Equal(0, fixture.Store.Load(out warning).Profiles.Count, "invalid list rejected");
+    True(warning is not null, "invalid row warned");
+}
 
 static void LegacyMigration()
 {

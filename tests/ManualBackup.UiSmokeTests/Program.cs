@@ -101,6 +101,8 @@ internal static class Program
             first.DestinationPath = Path.Combine(fixture, "backup");
             first.RestoreSourcePath = Path.Combine(fixture, "restore-source");
             first.RestoreDestinationPath = Path.Combine(fixture, "restore-target");
+            first.RestoreFolders.Add(new RestoreFolderEntry { SourcePath = first.RestoreSourcePath, DestinationPath = first.RestoreDestinationPath });
+            window.SelectedRestoreEntry = first.RestoreFolders[0];
             var expectedFiles = new Dictionary<string, string>();
             first.SourceFolders.Clear();
             for (var i = 1; i <= 3; i++)
@@ -179,12 +181,64 @@ internal static class Program
             Equal(100d, window.ProgressPercent, "second execution completes progress");
             Check(window.StatusText.Contains("完了", StringComparison.Ordinal), "second execution completes successfully");
 
+            restoreButton.SetCurrentValue(ToggleButton.IsCheckedProperty, true);
+            FlushBindings();
+            var restoreGrid = (DataGrid)window.FindName("RestoreFoldersGrid");
+            first.RestoreFolders.Clear();
+            FindButton(content, b => Equals(b.Content, "バックアップ設定から追加")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Equal(3, first.RestoreFolders.Count, "backup configuration imports one restore pair per source");
+            Check(first.RestoreFolders.Select(entry => (entry.SourcePath, entry.DestinationPath)).SequenceEqual(
+                first.SourceFolders.Select(entry => (Path.Combine(first.DestinationPath, entry.TargetFolderName), entry.SourcePath))), "import reverses backup paths exactly");
+            FindButton(content, b => Equals(b.Content, "バックアップ設定から追加")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Equal(3, first.RestoreFolders.Count, "repeat import does not duplicate pairs");
+            FindButton(content, b => Equals(b.Content, "組を追加")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Equal(4, first.RestoreFolders.Count, "add creates one editable pair");
+            Check(!window.CanRun, "incomplete restore row prevents preview");
+            FlushBindings();
+            FindButton(content, b => Equals(b.Content, "一覧から削除") && BindingOperations.GetBindingExpression(b, IsEnabledProperty)?.ParentBinding.Path.Path == "CanRemoveRestore")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Equal(3, first.RestoreFolders.Count, "remove unregisters selected pair");
+            first.RestoreFolders.RemoveAt(2);
+            for (var index = 0; index < first.RestoreFolders.Count; index++) first.RestoreFolders[index].DestinationPath = Path.Combine(fixture, "recovered-" + index);
+            FlushBindings();
+            Equal(2, restoreGrid.Items.Count, "restore grid binds both paired rows");
+            Check(window.CanRun && !window.CanExecute, "restore requires fresh preview");
+            VerifyRestoreLayout(renderHost, restoreGrid, 980, 900);
+            VerifyRestoreLayout(renderHost, restoreGrid, 1160, 1000);
+            previewButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, previewButton));
+            PumpUntil(() => !window.IsBusy, TimeSpan.FromSeconds(30));
+            Equal("2", window.NewCount, "restore preview aggregates both pairs");
+            Check(window.CanExecute, "reviewed paired restore enables execute");
+            Check(first.RestoreFolders.All(entry => !Directory.Exists(entry.DestinationPath)), "multi-restore preview writes no targets");
+            Check(window.PreviewRows.Select(row => row.RelativePath).SequenceEqual(new[] { "[1] example.txt", "[2] example.txt" }), "preview paths identify paired rows");
+            window.SelectedRestoreEntry = first.RestoreFolders[1];
+            Check(window.CanExecute, "row selection keeps reviewed plan");
+            first.RestoreFolders[0].DestinationPath = Path.Combine(fixture, "recovered-edited");
+            Check(!window.CanExecute && window.PreviewRows.Count == 0, "editing any pair invalidates review");
+            previewButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, previewButton));
+            PumpUntil(() => !window.IsBusy, TimeSpan.FromSeconds(30));
+            Check(window.CanExecute, "paired restore can be reviewed again");
+            var restorePlan = new ManualBackup.Core.MultiRestoreEngine().CreatePlanAsync(first.RestoreFolders.Select(entry =>
+                new ManualBackup.Core.RestoreFolderPair(entry.SourcePath, entry.DestinationPath)).ToArray()).GetAwaiter().GetResult();
+            var confirmation = new RestoreConfirmationWindow(restorePlan);
+            FlushBindings();
+            var confirmationGrid = Descendants(confirmation).OfType<DataGrid>().Single();
+            Equal(2, confirmationGrid.Items.Count, "confirmation lists every reviewed mapping");
+            confirmation.Close();
+            first.RestoreFolders.Add(new RestoreFolderEntry());
+            Check(!window.CanExecute && !window.CanRun, "adding a row clears review and requires complete paths");
+            first.RestoreFolders.RemoveAt(2);
+            backupButton.SetCurrentValue(ToggleButton.IsCheckedProperty, true);
+            FlushBindings();
+            Check(IsCollapsed(restoreGrid) && window.IsBackup, "backup mode hides paired restore controls");
+
             window.Close();
             window = null;
             using var saved = JsonDocument.Parse(File.ReadAllText(Path.Combine(settingsDirectory, "settings.json")));
             var savedProfiles = saved.RootElement.GetProperty("Profiles").EnumerateArray().ToArray();
             Equal(4, savedProfiles.Single(p => p.GetProperty("Id").GetString() == first.Id).GetProperty("MaxParallelSources").GetInt32(), "first UI selection is persisted");
             Equal(1, savedProfiles.Single(p => p.GetProperty("Id").GetString() == second.Id).GetProperty("MaxParallelSources").GetInt32(), "second UI selection remains independently persisted");
+            Equal(2, savedProfiles.Single(p => p.GetProperty("Id").GetString() == first.Id).GetProperty("RestoreFolders").GetArrayLength(), "paired restore rows are persisted");
             Check(DispatcherErrors.Count == 0, "no unhandled WPF dispatcher exceptions");
             Console.WriteLine($"PASS {_checks} in-process WPF UI checks. No window was shown and no external desktop was controlled.");
             return 0;
@@ -280,6 +334,22 @@ internal static class Program
         Check(bounds.Left >= 0 && bounds.Right <= width && bounds.Top >= 0 && bounds.Bottom <= height, $"parallel control fits inside {width} by {height} content");
         var row = (FrameworkElement)LogicalTreeHelper.GetParent(LogicalTreeHelper.GetParent(combo));
         Check(row.DesiredSize.Width <= row.ActualWidth + 1, $"parallel control row is not clipped at {width} by {height}");
+    }
+
+    private static void VerifyRestoreLayout(FrameworkElement content, DataGrid grid, int width, int height)
+    {
+        content.Measure(new Size(width, height)); content.Arrange(new Rect(0, 0, width, height)); content.UpdateLayout();
+        var bounds = grid.TransformToAncestor(content).TransformBounds(new Rect(grid.RenderSize));
+        Check(bounds.Width > 500 && bounds.Height >= 150 && bounds.Right <= width && bounds.Bottom <= height, $"paired restore table fits {width} by {height}");
+        var controls = VisualDescendants(grid).OfType<TextBox>().Where(box => BindingOperations.GetBindingExpression(box, TextBox.TextProperty)?.ParentBinding.Path.Path == "DestinationPath").ToArray();
+        Check(controls.Length >= 2 && controls.All(box => box.ActualWidth > 100), $"paired row destination editors render at {width} by {height}");
+    }
+
+    private static IEnumerable<DependencyObject> VisualDescendants(DependencyObject node)
+    {
+        yield return node;
+        for (var index = 0; index < VisualTreeHelper.GetChildrenCount(node); index++)
+            foreach (var child in VisualDescendants(VisualTreeHelper.GetChild(node, index))) yield return child;
     }
 
     private static void Render(FrameworkElement content, string output, int width, int height)

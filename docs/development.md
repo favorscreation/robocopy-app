@@ -9,7 +9,7 @@ C# / .NET 10 LTS / WPFで構成し、外部UIライブラリは使用してい�
 | 場所 | 内容 |
 | --- | --- |
 | `src/ManualBackup.App` | WPF画面、設定、ログ。ターゲットは `net10.0-windows` |
-| `src/ManualBackup.Core` | 差分確認、バックアップ、復元、複数コピー元の同時実行。ターゲットは `net10.0` |
+| `src/ManualBackup.Core` | 差分確認、バックアップ、複数組の復元、複数コピー元の同時実行。ターゲットは `net10.0` |
 | `tests` | コンソール形式の統合・設定・WPF連携・負荷テスト |
 | `build.ps1` | テスト、自己完結EXEの発行、配布ZIPの作成 |
 
@@ -56,9 +56,10 @@ dotnet run --project tests\ManualBackup.Tests -c Release
 dotnet run --project tests\ManualBackup.SettingsTests -c Release
 dotnet run --project tests\ManualBackup.UiSmokeTests -c Release
 dotnet run --project tests\ManualBackup.LoadTests -c Release
+dotnet run --project tests\ManualBackup.PairedRestoreTests -c Release
 ```
 
-`build.ps1` が実行するのは最初の2つです。WPF連携テストは画面部品・イベント・描画と実ファイル処理を内部で検証します。負荷テストは空ファイル1万件と混在ファイル1万件・合計1GiBのデータを作成し、コピー・全件照合・差分更新・クリーンアップを行うため、時間と空き容量が必要です。実行結果の範囲は[検証記録](validation.md)を参照してください。
+`build.ps1` が実行するのは最初の2つです。`ManualBackup.PairedRestoreTests` は3組・合計1万ファイル／1GiBで、並列バックアップ、全件復元、差分復元、確認後の変更検出と全件SHA-256照合を行います。WPF連携テストは画面部品・イベント・描画と実ファイル処理を内部で検証します。負荷テストは空ファイル1万件と混在ファイル1万件・合計1GiBのデータを作成し、コピー・全件照合・差分更新・クリーンアップを行うため、時間と空き容量が必要です。実行結果の範囲は[検証記録](validation.md)を参照してください。
 
 ## ランタイムの更新
 

@@ -5,8 +5,7 @@
       <Grid Margin="20,28,20,20">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <StackPanel>
-          <TextBlock Text="BACKUP DESK" Foreground="White" FontSize="21" FontWeight="Bold"/>
-          <TextBlock Text="必要なときに、差分だけ。" Foreground="#A9C4CB" FontSize="12" Margin="0,7,0,34"/>
+          <TextBlock Text="BACKUP DESK" Foreground="White" FontSize="21" FontWeight="Bold" Margin="0,0,0,34"/>
         </StackPanel>
         <DockPanel Grid.Row="1" Margin="0,0,0,12">
           <Button DockPanel.Dock="Right" Content="＋ 追加" Click="AddProfile_Click" IsEnabled="{Binding CanEdit}" Padding="8,5" Background="#25444F" Foreground="White" BorderThickness="0" FontSize="12" AutomationProperties.Name="バックアップ設定を追加"/>
@@ -33,7 +32,7 @@
             <RadioButton Content="バックアップ" GroupName="OperationMode" IsChecked="{Binding IsBackup}" FontSize="14" Padding="5,1" Margin="0,0,22,0" AutomationProperties.Name="バックアップモード"/>
             <RadioButton Content="復元" GroupName="OperationMode" IsChecked="{Binding IsRestore}" FontSize="14" Padding="5,1" AutomationProperties.Name="復元モード"/>
           </StackPanel>
-          <TextBlock Text="{Binding ModeTitle}" FontSize="26" FontWeight="Bold"/><TextBlock Text="{Binding ModeDescription}" Style="{StaticResource Caption}" Margin="0,6,12,0"/>
+          <TextBlock Text="{Binding ModeTitle}" FontSize="26" FontWeight="Bold"/>
         </StackPanel>
       </DockPanel>
       <Border Grid.Row="1" Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="10" Padding="20,17">
@@ -42,8 +41,8 @@
           <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
           <TextBlock Grid.Row="0" Text="設定名" VerticalAlignment="Center"/>
           <TextBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding SelectedProfile.Name, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="設定名" Margin="0,0,0,12" MaxLength="80"/>
-          <TextBlock Grid.Row="1" Text="{Binding SourceLabel}" VerticalAlignment="Top" Margin="0,10,0,0"/>
-          <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,10">
+          <TextBlock Grid.Row="1" Text="{Binding SourceLabel}" VerticalAlignment="Top" Margin="0,10,0,0" Visibility="{Binding BackupSourcesVisibility}"/>
+          <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,10" Visibility="{Binding BackupSourcesVisibility}">
             <StackPanel Visibility="{Binding BackupSourcesVisibility}">
               <DockPanel Margin="0,0,0,6">
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="10,0,0,0" VerticalAlignment="Center">
@@ -65,22 +64,40 @@
               <TextBlock Text="{Binding BackupLayoutHint}" Style="{StaticResource Caption}" FontSize="10" Margin="0,5,0,0"/>
               <TextBlock Text="同時実行はコピー元フォルダー単位です。1フォルダー内のファイルは順次コピーします。" Style="{StaticResource Caption}" FontSize="10" Margin="0,3,0,0"/>
             </StackPanel>
-            <Grid Visibility="{Binding RestoreSourceVisibility}">
-              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-              <TextBox Text="{Binding ActiveSourcePath, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="{Binding SourceFieldName}" Margin="0,0,8,0" ToolTip="{Binding SourceTip}"/>
-              <Button Grid.Column="1" Content="参照…" Click="BrowseSource_Click"/>
-            </Grid>
           </Grid>
-          <TextBlock Grid.Row="2" Text="{Binding DestinationLabel}" VerticalAlignment="Center"/>
-          <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding ActiveDestinationPath, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="{Binding DestinationFieldName}" Margin="0,0,8,0" ToolTip="{Binding DestinationTip}"/>
-          <Button Grid.Row="2" Grid.Column="2" Content="参照…" Click="BrowseDestination_Click"/>
+          <StackPanel Grid.Row="1" Grid.ColumnSpan="3" Visibility="{Binding RestoreSourceVisibility}" Margin="0,0,0,10">
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+              <Button Content="組を追加" Click="AddRestoreRow_Click" Padding="10,6" Margin="0,0,6,0"/>
+              <Button Content="バックアップ設定から追加" Click="ImportRestoreRows_Click" Padding="10,6" Margin="0,0,6,0" ToolTip="現在のバックアップ設定の保存先を復元元、コピー元を復元先として追加します。"/>
+              <Button Content="一覧から削除" Click="RemoveRestoreRow_Click" IsEnabled="{Binding CanRemoveRestore}" Padding="10,6" ToolTip="選択した組の登録を外します。ファイルは削除しません。"/>
+            </StackPanel>
+            <DataGrid x:Name="RestoreFoldersGrid" ItemsSource="{Binding SelectedProfile.RestoreFolders}" SelectedItem="{Binding SelectedRestoreEntry}" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" CanUserResizeRows="False" HeadersVisibility="Column" RowHeaderWidth="0" RowHeight="40" Height="154" BorderBrush="#CBD5E1" BorderThickness="1" Background="White" GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#E2E8F0" SelectionMode="Single" SelectionUnit="FullRow" AutomationProperties.Name="復元フォルダーの対応一覧">
+              <DataGrid.Columns>
+                <DataGridTemplateColumn Header="復元元フォルダー" Width="*">
+                  <DataGridTemplateColumn.CellTemplate><DataTemplate><DockPanel Margin="3">
+                    <Button DockPanel.Dock="Right" Content="参照…" Click="BrowseRestoreSource_Click" Padding="7,3" Margin="4,0,0,0" AutomationProperties.Name="復元元を参照"/>
+                    <TextBox Text="{Binding SourcePath, UpdateSourceTrigger=PropertyChanged}" Padding="4" VerticalContentAlignment="Center" ToolTip="{Binding SourcePath}" AutomationProperties.Name="復元元フォルダー"/>
+                  </DockPanel></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Header="復元先フォルダー" Width="*">
+                  <DataGridTemplateColumn.CellTemplate><DataTemplate><DockPanel Margin="3">
+                    <Button DockPanel.Dock="Right" Content="参照…" Click="BrowseRestoreDestination_Click" Padding="7,3" Margin="4,0,0,0" AutomationProperties.Name="復元先を参照"/>
+                    <TextBox Text="{Binding DestinationPath, UpdateSourceTrigger=PropertyChanged}" Padding="4" VerticalContentAlignment="Center" ToolTip="{Binding DestinationPath}" AutomationProperties.Name="復元先フォルダー"/>
+                  </DockPanel></DataTemplate></DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+              </DataGrid.Columns>
+            </DataGrid>
+            <TextBlock Text="各行の復元元の中身を、同じ行の復元先へ順番に戻します。差分一覧の [番号] は行順です。" Style="{StaticResource Caption}" FontSize="10" Margin="0,5,0,0"/>
+          </StackPanel>
+          <TextBlock Grid.Row="2" Text="{Binding DestinationLabel}" VerticalAlignment="Center" Visibility="{Binding BackupSourcesVisibility}"/>
+          <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding ActiveDestinationPath, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="{Binding DestinationFieldName}" Margin="0,0,8,0" ToolTip="{Binding DestinationTip}" Visibility="{Binding BackupSourcesVisibility}"/>
+          <Button Grid.Row="2" Grid.Column="2" Content="参照…" Click="BrowseDestination_Click" Visibility="{Binding BackupSourcesVisibility}"/>
           <Border Grid.Row="3" Grid.ColumnSpan="3" Background="#F0F9F7" CornerRadius="5" Padding="11,9" Margin="0,14,0,0"><TextBlock Text="{Binding OperationWarning}" FontSize="11" Foreground="#29645D"/></Border>
         </Grid>
       </Border>
       <Grid Grid.Row="2" Margin="0,18,0,16">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-        <TextBlock Text="{Binding ActionInstruction}" Style="{StaticResource SectionTitle}" VerticalAlignment="Center"/>
         <Button Grid.Column="1" Content="差分を確認" Click="Preview_Click" IsEnabled="{Binding CanRun}" Margin="8,0,8,0"/>
         <Button Grid.Column="2" Content="{Binding RunButtonText}" Click="Run_Click" IsEnabled="{Binding CanExecute}" Style="{StaticResource PrimaryButton}" ToolTip="{Binding RunTip}" ToolTipService.ShowOnDisabled="True"/>
         <Button Grid.Column="3" Content="中止" Click="Cancel_Click" IsEnabled="{Binding IsBusy}" Margin="8,0,0,0"/>
