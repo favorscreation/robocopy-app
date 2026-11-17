@@ -203,6 +203,7 @@ internal static class Program
             FlushBindings();
             Equal(2, restoreGrid.Items.Count, "restore grid binds both paired rows");
             Check(window.CanRun && !window.CanExecute, "restore requires fresh preview");
+            VerifyFivePairLayouts(renderHost, restoreGrid, first, window, fixture, snapshot);
             VerifyRestoreLayout(renderHost, restoreGrid, 980, 900);
             VerifyRestoreLayout(renderHost, restoreGrid, 1160, 1000);
             previewButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, previewButton));
@@ -343,6 +344,153 @@ internal static class Program
         Check(bounds.Width > 500 && bounds.Height >= 150 && bounds.Right <= width && bounds.Bottom <= height, $"paired restore table fits {width} by {height}");
         var controls = VisualDescendants(grid).OfType<TextBox>().Where(box => BindingOperations.GetBindingExpression(box, TextBox.TextProperty)?.ParentBinding.Path.Path == "DestinationPath").ToArray();
         Check(controls.Length >= 2 && controls.All(box => box.ActualWidth > 100), $"paired row destination editors render at {width} by {height}");
+    }
+
+    private static void VerifyFivePairLayouts(FrameworkElement content, DataGrid grid, BackupProfile profile,
+        MainWindow window, string fixture, string? snapshot)
+    {
+        var originalRows = profile.RestoreFolders.ToArray();
+        var originalSelection = window.SelectedRestoreEntry;
+        RestoreFolderEntry LayoutPair(int index)
+        {
+            var source = Path.Combine(fixture, "layout-source-" + index);
+            Directory.CreateDirectory(source);
+            File.WriteAllText(Path.Combine(source, "layout-preview.txt"), "Preview row " + index);
+            return new RestoreFolderEntry
+            {
+                SourcePath = source,
+                DestinationPath = Path.Combine(fixture, "layout-target-" + index)
+            };
+        }
+        void PreviewLayoutRows()
+        {
+            FlushBindings();
+            FindButton(content, button =>
+                BindingOperations.GetBindingExpression(button, IsEnabledProperty)?.ParentBinding.Path.Path == "CanRun")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            PumpUntil(() => !window.IsBusy, TimeSpan.FromSeconds(30));
+            Check(window.CanExecute && window.PreviewRows.Count == profile.RestoreFolders.Count,
+                "layout fixture has a real preview row for every restore pair");
+        }
+        try
+        {
+            for (var index = profile.RestoreFolders.Count; index < 5; index++)
+                profile.RestoreFolders.Add(LayoutPair(index));
+            PreviewLayoutRows();
+            VerifyFivePairLayout(content, grid, 964, 861,
+                snapshot is null ? null : Path.ChangeExtension(snapshot, null) + "-restore-five-minimum.png");
+            VerifyFivePairLayout(content, grid, 980, 900, null);
+            VerifyFivePairLayout(content, grid, 1144, 961,
+                snapshot is null ? null : Path.ChangeExtension(snapshot, null) + "-restore-five.png");
+            VerifyFivePairLayout(content, grid, 1160, 1000, null);
+
+            // The shared focused-button template uses a two-pixel border.
+            // Exercise that larger desired size without needing desktop focus.
+            var previewButton = FindButton(content, button =>
+                BindingOperations.GetBindingExpression(button, IsEnabledProperty)?.ParentBinding.Path.Path == "CanRun");
+            var previousBorder = previewButton.BorderThickness;
+            try
+            {
+                previewButton.SetCurrentValue(Control.BorderThicknessProperty, new Thickness(2));
+                VerifyFivePairLayout(content, grid, 964, 861, null);
+                Check(true, "restore layout accommodates the focused action-button border");
+            }
+            finally { previewButton.SetCurrentValue(Control.BorderThicknessProperty, previousBorder); }
+
+            // A sixth row must scroll rather than compressing all the editors.
+            profile.RestoreFolders.Add(LayoutPair(5));
+            PreviewLayoutRows();
+            VerifyFivePairLayout(content, grid, 964, 861, null);
+            grid.ScrollIntoView(profile.RestoreFolders[^1]);
+            content.UpdateLayout();
+            FlushBindings();
+            var sixth = grid.ItemContainerGenerator.ContainerFromIndex(5) as DataGridRow;
+            Check(sixth is not null && IsWithin(sixth, RestoreViewport(grid)), "sixth restore pair scrolls fully into view");
+        }
+        finally
+        {
+            profile.RestoreFolders.Clear();
+            foreach (var row in originalRows) profile.RestoreFolders.Add(row);
+            window.SelectedRestoreEntry = originalSelection;
+            FlushBindings();
+            content.Measure(new Size(1160, 1000));
+            content.Arrange(new Rect(0, 0, 1160, 1000));
+            content.UpdateLayout();
+        }
+    }
+
+    private static void VerifyFivePairLayout(FrameworkElement content, DataGrid grid, int width, int height, string? snapshot)
+    {
+        var scroll = VisualDescendants(grid).OfType<ScrollViewer>().First();
+        scroll.ScrollToTop();
+        content.Measure(new Size(width, height));
+        content.Arrange(new Rect(0, 0, width, height));
+        content.UpdateLayout();
+        FlushBindings();
+        if (snapshot is not null)
+        {
+            Render(content, snapshot, width, height);
+            Console.WriteLine("OFFSCREEN_RESTORE_RENDER " + snapshot);
+        }
+        var sizeLabel = $"{width} by {height} with {grid.Items.Count} pairs";
+        var rows = Enumerable.Range(0, 5)
+            .Select(index => grid.ItemContainerGenerator.ContainerFromIndex(index) as DataGridRow).ToArray();
+        Check(rows.All(row => row is not null), "first five restore rows are realized at " + sizeLabel);
+        var viewport = RestoreViewport(grid);
+        Check(rows.All(row => IsWithin(row!, viewport)), "five complete restore pairs fit the viewport at " + sizeLabel);
+        foreach (var row in rows.Cast<DataGridRow>())
+        {
+            var editors = VisualDescendants(row).OfType<TextBox>().ToArray();
+            var browse = VisualDescendants(row).OfType<Button>().ToArray();
+            Check(editors.Length == 2 && editors.All(box => box.ActualWidth > 100 && box.ActualHeight >= 28 && IsWithin(box, row)),
+                $"pair {row.GetIndex() + 1} has two unclipped path editors at {sizeLabel}");
+            Check(browse.Length == 2 && browse.All(button => button.ActualWidth >= 40 && button.ActualHeight >= 30 && IsWithin(button, row)),
+                $"pair {row.GetIndex() + 1} has two usable browse buttons at {sizeLabel}");
+        }
+        var preview = VisualDescendants(content).OfType<DataGrid>().Single(candidate =>
+            BindingOperations.GetBindingExpression(candidate, ItemsControl.ItemsSourceProperty)?.ParentBinding.Path.Path == "PreviewRows");
+        var previewButton = FindButton(content, button =>
+            BindingOperations.GetBindingExpression(button, IsEnabledProperty)?.ParentBinding.Path.Path == "CanRun");
+        var runButton = FindButton(content, button =>
+            BindingOperations.GetBindingExpression(button, ContentControl.ContentProperty)?.ParentBinding.Path.Path == "RunButtonText");
+        var status = Descendants(content).OfType<TextBlock>().Single(block =>
+            BindingOperations.GetBindingExpression(block, TextBlock.TextProperty)?.ParentBinding.Path.Path == "StatusText");
+        var footerButton = FindButton(content, button =>
+            BindingOperations.GetBindingExpression(button, ContentControl.ContentProperty)?.ParentBinding.Path.Path == "OpenDestinationText");
+        var previewPanel = VisualAncestors(preview).OfType<Border>().First(border =>
+            Grid.GetRow(border) == 3 && VisualTreeHelper.GetParent(border) is Grid);
+        var progress = VisualDescendants(content).OfType<ProgressBar>().Single();
+        var footerPanel = VisualAncestors(progress).OfType<StackPanel>().First();
+        var previewBounds = previewPanel.TransformToAncestor(content).TransformBounds(new Rect(previewPanel.RenderSize));
+        var footerBounds = footerPanel.TransformToAncestor(content).TransformBounds(new Rect(footerPanel.RenderSize));
+        var previewSlot = LayoutInformation.GetLayoutSlot(previewPanel);
+        Console.WriteLine($"EVIDENCE restore-layout {sizeLabel}: contentDesired={content.DesiredSize}; previewBounds={previewBounds}; previewSlot={previewSlot}; previewGridHeight={preview.ActualHeight:F2}; footerBounds={footerBounds}");
+        Check(IsWithin(previewButton, content) && IsWithin(runButton, content), "restore action buttons remain visible at " + sizeLabel);
+        Check(preview.ActualHeight >= 64 && IsWithin(preview, content), "restore preview remains usable and visible at " + sizeLabel);
+        Check(previewPanel.ActualHeight <= previewSlot.Height + 0.5 && previewBounds.Bottom <= footerBounds.Top + 0.5,
+            "restore preview is not clipped by its grid row or overlapped by footer at " + sizeLabel);
+        var previewRow = preview.ItemContainerGenerator.ContainerFromIndex(0) as DataGridRow;
+        var previewViewport = RestoreViewport(preview);
+        Console.WriteLine($"EVIDENCE restore-preview {sizeLabel}: viewportHeight={previewViewport.ActualHeight:F2}; rowHeight={previewRow?.ActualHeight:F2}");
+        Check(previewRow is not null && IsWithin(previewRow, previewViewport),
+            "at least one complete real preview row remains visible at " + sizeLabel);
+        Check(IsWithin(status, content) && IsWithin(footerButton, content), "restore status and footer remain visible at " + sizeLabel);
+    }
+
+    private static FrameworkElement RestoreViewport(DataGrid grid) =>
+        VisualDescendants(grid).OfType<ScrollContentPresenter>().First();
+
+    private static bool IsWithin(FrameworkElement child, FrameworkElement ancestor)
+    {
+        var bounds = child.TransformToAncestor(ancestor).TransformBounds(new Rect(child.RenderSize));
+        return child.ActualWidth > 0 && child.ActualHeight > 0 && bounds.Left >= -0.5 && bounds.Top >= -0.5 &&
+            bounds.Right <= ancestor.ActualWidth + 0.5 && bounds.Bottom <= ancestor.ActualHeight + 0.5;
+    }
+
+    private static IEnumerable<DependencyObject> VisualAncestors(DependencyObject node)
+    {
+        for (var current = VisualTreeHelper.GetParent(node); current is not null; current = VisualTreeHelper.GetParent(current))
+            yield return current;
     }
 
     private static IEnumerable<DependencyObject> VisualDescendants(DependencyObject node)
