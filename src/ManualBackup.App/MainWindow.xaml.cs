@@ -7,6 +7,8 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Threading;
 using ManualBackup.Core;
 using Microsoft.Win32;
@@ -31,6 +33,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private bool _isBusy;
     private bool _closeAfterWork;
     private bool _isRestore;
+    private bool _clampingFolderList;
     private MultiRestorePlan? _reviewedRestorePlan;
     private string? _lastLogPath;
     private string? _currentLogPath;
@@ -156,6 +159,60 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         DataContext = this;
         _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); SaveSettings(); };
         if (warning is not null) Loaded += (_, _) => MessageBox.Show(this, warning, "設定の読み込み", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    private DataGrid FolderGridFor(Thumb handle) =>
+        ReferenceEquals(handle, BackupFoldersResizeThumb) ? SourceFoldersGrid : RestoreFoldersGrid;
+
+    private double MinimumFolderListHeight(DataGrid grid) => ReferenceEquals(grid, SourceFoldersGrid) ? 152 : 176;
+    private double DefaultFolderListHeight(DataGrid grid) => ReferenceEquals(grid, SourceFoldersGrid) ? 224 : 264;
+
+    private void ResizeFolderList(DataGrid grid, double requestedHeight)
+    {
+        if (!double.IsFinite(requestedHeight)) return;
+        var minimum = MinimumFolderListHeight(grid);
+        var previewSpace = Math.Max(0, LayoutInformation.GetLayoutSlot(PreviewPanel).Height - PreviewPanel.MinHeight);
+        var maximum = Math.Max(minimum, grid.Height + previewSpace);
+        grid.Height = Math.Clamp(requestedHeight, minimum, maximum);
+    }
+
+    private void FolderListResize_DragDelta(object sender, DragDeltaEventArgs e)
+    {
+        if (sender is not Thumb handle) return;
+        var grid = FolderGridFor(handle);
+        ResizeFolderList(grid, grid.Height + e.VerticalChange);
+        e.Handled = true;
+    }
+
+    private void FolderListResize_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not Thumb handle || e.Key is not (Key.Up or Key.Down or Key.Home)) return;
+        var grid = FolderGridFor(handle);
+        ResizeFolderList(grid, e.Key == Key.Home ? DefaultFolderListHeight(grid) : grid.Height + (e.Key == Key.Down ? 8 : -8));
+        e.Handled = true;
+    }
+
+    private void FolderListResize_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Thumb handle) return;
+        var grid = FolderGridFor(handle);
+        ResizeFolderList(grid, DefaultFolderListHeight(grid));
+        e.Handled = true;
+    }
+
+    private void MainLayout_LayoutUpdated(object? sender, EventArgs e)
+    {
+        if (_clampingFolderList || MainLayout is null || PreviewPanel is null ||
+            MainLayout.ActualHeight <= 0 || PreviewPanel.ActualHeight <= 0) return;
+        var grid = IsRestore ? RestoreFoldersGrid : SourceFoldersGrid;
+        if (grid is null || grid.ActualHeight <= 0) return;
+        var deficit = PreviewPanel.MinHeight - LayoutInformation.GetLayoutSlot(PreviewPanel).Height;
+        if (deficit <= 0.5 || grid.Height <= MinimumFolderListHeight(grid) + 0.5) return;
+        // Auto-sized form rows must yield space after a window shrink or mode
+        // change; otherwise the preview's MinHeight would overlap the footer.
+        _clampingFolderList = true;
+        try { grid.Height = Math.Max(MinimumFolderListHeight(grid), grid.Height - deficit); }
+        finally { _clampingFolderList = false; }
     }
 
     private void Profile_PropertyChanged(object? sender, PropertyChangedEventArgs e)

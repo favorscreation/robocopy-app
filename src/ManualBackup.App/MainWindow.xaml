@@ -1,4 +1,32 @@
-<Window x:Class="ManualBackup.App.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Backup Desk — バックアップと復元" Width="1160" Height="1000" MinWidth="980" MinHeight="900" WindowStartupLocation="CenterScreen" Closing="Window_Closing">
+<Window x:Class="ManualBackup.App.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Backup Desk — バックアップと復元" Width="1160" Height="1000" MinWidth="980" MinHeight="900" ResizeMode="CanResizeWithGrip" WindowStartupLocation="CenterScreen" Closing="Window_Closing">
+  <Window.Resources>
+    <Style x:Key="FolderColumnHeader" TargetType="DataGridColumnHeader" BasedOn="{StaticResource {x:Type DataGridColumnHeader}}">
+      <Setter Property="BorderThickness" Value="0,0,1,1"/>
+      <Setter Property="ToolTip" Value="見出しの境界を左右にドラッグして列幅を変更できます。"/>
+    </Style>
+    <Style x:Key="FolderGridEditor" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+      <Setter Property="Padding" Value="6,3"/>
+      <Setter Property="MinHeight" Value="28"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style x:Key="FolderListResizeHandle" TargetType="Thumb">
+      <Setter Property="Height" Value="12"/>
+      <Setter Property="Cursor" Value="SizeNS"/>
+      <Setter Property="Focusable" Value="True"/>
+      <Setter Property="KeyboardNavigation.IsTabStop" Value="True"/>
+      <Setter Property="ToolTip" Value="上下にドラッグして一覧の高さを変更。ダブルクリックまたはHomeキーで標準の高さに戻します。"/>
+      <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Thumb">
+        <Border x:Name="HandleSurface" Background="Transparent" CornerRadius="3">
+          <Border x:Name="HandleGrip" Width="48" Height="3" Background="#94A3B8" CornerRadius="1.5" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Border>
+        <ControlTemplate.Triggers>
+          <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="HandleSurface" Property="Background" Value="#F1F5F9"/><Setter TargetName="HandleGrip" Property="Background" Value="#0F766E"/></Trigger>
+          <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="HandleSurface" Property="Background" Value="#E2E8F0"/><Setter TargetName="HandleGrip" Property="Background" Value="#0F766E"/></Trigger>
+          <Trigger Property="IsDragging" Value="True"><Setter TargetName="HandleGrip" Property="Background" Value="#0F766E"/></Trigger>
+        </ControlTemplate.Triggers>
+      </ControlTemplate></Setter.Value></Setter>
+    </Style>
+  </Window.Resources>
   <Grid>
     <Grid.ColumnDefinitions><ColumnDefinition Width="235"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
     <Border Grid.Column="0" Background="#142B35">
@@ -23,9 +51,9 @@
         </StackPanel>
       </Grid>
     </Border>
-    <Grid Grid.Column="1" Margin="30,18,30,14">
+    <Grid x:Name="MainLayout" Grid.Column="1" Margin="30,18,30,14" LayoutUpdated="MainLayout_LayoutUpdated">
       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-      <DockPanel Margin="0,0,0,8">
+      <DockPanel Margin="0,0,0,4">
         <Button DockPanel.Dock="Right" Content="使い方" Click="Help_Click" Padding="14,8" VerticalAlignment="Top"/>
         <StackPanel>
           <StackPanel Orientation="Horizontal" IsEnabled="{Binding CanEdit}" Margin="0,0,0,6">
@@ -35,14 +63,13 @@
           <TextBlock Text="{Binding ModeTitle}" FontSize="26" FontWeight="Bold"/>
         </StackPanel>
       </DockPanel>
-      <Border Grid.Row="1" Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="10" Padding="20,10">
+      <Border Grid.Row="1" Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="10" Padding="20,8">
         <Grid IsEnabled="{Binding CanEdit}">
           <Grid.ColumnDefinitions><ColumnDefinition Width="83"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
           <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
           <TextBlock Grid.Row="0" Text="設定名" VerticalAlignment="Center"/>
-          <TextBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding SelectedProfile.Name, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="設定名" Padding="11,6" Margin="0,0,0,8" MaxLength="80"/>
-          <TextBlock Grid.Row="1" Text="{Binding SourceLabel}" VerticalAlignment="Top" Margin="0,10,0,0" Visibility="{Binding BackupSourcesVisibility}"/>
-          <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,0,0,10" Visibility="{Binding BackupSourcesVisibility}">
+          <TextBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2" Text="{Binding SelectedProfile.Name, UpdateSourceTrigger=PropertyChanged}" AutomationProperties.Name="設定名" Padding="11,6" Margin="0,0,0,4" MaxLength="80"/>
+          <Grid Grid.Row="1" Grid.ColumnSpan="3" Margin="0,0,0,10" Visibility="{Binding BackupSourcesVisibility}">
             <StackPanel Visibility="{Binding BackupSourcesVisibility}">
               <DockPanel Margin="0,0,0,6">
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="10,0,0,0" VerticalAlignment="Center">
@@ -55,14 +82,15 @@
                   <Button Content="一覧から削除" Click="RemoveSource_Click" IsEnabled="{Binding CanRemoveSource}" Padding="10,6" ToolTip="選択したコピー元の登録を外します。ファイルは削除しません。"/>
                 </StackPanel>
               </DockPanel>
-              <DataGrid x:Name="SourceFoldersGrid" ItemsSource="{Binding SelectedProfile.SourceFolders}" SelectedItem="{Binding SelectedSourceEntry}" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" CanUserResizeRows="False" HeadersVisibility="Column" RowHeaderWidth="0" RowHeight="32" Height="112" BorderBrush="#CBD5E1" BorderThickness="1" Background="White" GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#E2E8F0" SelectionMode="Single" SelectionUnit="FullRow" CellEditEnding="SourceFoldersGrid_CellEditEnding" AutomationProperties.Name="コピー元フォルダー一覧">
+              <DataGrid x:Name="SourceFoldersGrid" ItemsSource="{Binding SelectedProfile.SourceFolders}" SelectedItem="{Binding SelectedSourceEntry}" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" CanUserResizeRows="False" CanUserResizeColumns="True" ColumnHeaderStyle="{StaticResource FolderColumnHeader}" MinColumnWidth="140" HeadersVisibility="Column" RowHeaderWidth="0" RowHeight="36" Height="224" BorderBrush="#CBD5E1" BorderThickness="1" Background="White" GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#E2E8F0" SelectionMode="Single" SelectionUnit="FullRow" ScrollViewer.HorizontalScrollBarVisibility="Auto" CellEditEnding="SourceFoldersGrid_CellEditEnding" AutomationProperties.Name="コピー元フォルダー一覧">
+                <DataGrid.CellStyle><Style TargetType="DataGridCell" BasedOn="{StaticResource {x:Type DataGridCell}}"><Setter Property="Padding" Value="6,3"/></Style></DataGrid.CellStyle>
                 <DataGrid.Columns>
-                  <DataGridTextColumn Header="コピー元フォルダー" Width="*" Binding="{Binding SourcePath, UpdateSourceTrigger=PropertyChanged}"><DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="ToolTip" Value="{Binding SourcePath}"/></Style></DataGridTextColumn.ElementStyle></DataGridTextColumn>
-                  <DataGridTextColumn Header="保存先フォルダー名" Width="180" Binding="{Binding TargetFolderName, UpdateSourceTrigger=PropertyChanged}"><DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="ToolTip" Value="{Binding TargetFolderName}"/></Style></DataGridTextColumn.ElementStyle></DataGridTextColumn>
+                  <DataGridTextColumn Header="コピー元フォルダー" Width="*" MinWidth="180" Binding="{Binding SourcePath, UpdateSourceTrigger=PropertyChanged}" EditingElementStyle="{StaticResource FolderGridEditor}"><DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="ToolTip" Value="{Binding SourcePath}"/></Style></DataGridTextColumn.ElementStyle></DataGridTextColumn>
+                  <DataGridTextColumn Header="保存先フォルダー名" Width="180" Binding="{Binding TargetFolderName, UpdateSourceTrigger=PropertyChanged}" EditingElementStyle="{StaticResource FolderGridEditor}"><DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="VerticalAlignment" Value="Center"/><Setter Property="TextWrapping" Value="NoWrap"/><Setter Property="TextTrimming" Value="CharacterEllipsis"/><Setter Property="ToolTip" Value="{Binding TargetFolderName}"/></Style></DataGridTextColumn.ElementStyle></DataGridTextColumn>
                 </DataGrid.Columns>
               </DataGrid>
-              <TextBlock Text="{Binding BackupLayoutHint}" Style="{StaticResource Caption}" FontSize="10" Margin="0,5,0,0"/>
-              <TextBlock Text="同時実行はコピー元フォルダー単位です。1フォルダー内のファイルは順次コピーします。" Style="{StaticResource Caption}" FontSize="10" Margin="0,3,0,0"/>
+              <Thumb x:Name="BackupFoldersResizeThumb" Style="{StaticResource FolderListResizeHandle}" AutomationProperties.Name="コピー元一覧の高さを変更" DragDelta="FolderListResize_DragDelta" PreviewKeyDown="FolderListResize_PreviewKeyDown" MouseDoubleClick="FolderListResize_MouseDoubleClick"/>
+              <TextBlock Text="{Binding BackupLayoutHint}" Style="{StaticResource Caption}" FontSize="10" Margin="0,4,0,0" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="{Binding BackupLayoutHint}"/>
             </StackPanel>
           </Grid>
           <StackPanel Grid.Row="1" Grid.ColumnSpan="3" Visibility="{Binding RestoreSourceVisibility}" Margin="0,0,0,6">
@@ -71,7 +99,7 @@
               <Button Content="バックアップ設定から追加" Click="ImportRestoreRows_Click" Padding="10,6" Margin="0,0,6,0" ToolTip="現在のバックアップ設定の保存先を復元元、コピー元を復元先として追加します。"/>
               <Button Content="一覧から削除" Click="RemoveRestoreRow_Click" IsEnabled="{Binding CanRemoveRestore}" Padding="10,6" ToolTip="選択した組の登録を外します。ファイルは削除しません。"/>
             </StackPanel>
-            <DataGrid x:Name="RestoreFoldersGrid" ItemsSource="{Binding SelectedProfile.RestoreFolders}" SelectedItem="{Binding SelectedRestoreEntry}" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" CanUserResizeRows="False" HeadersVisibility="Column" RowHeaderWidth="0" RowHeight="44" Height="264" BorderBrush="#CBD5E1" BorderThickness="1" Background="White" GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#E2E8F0" SelectionMode="Single" SelectionUnit="FullRow" ScrollViewer.HorizontalScrollBarVisibility="Disabled" AutomationProperties.Name="復元フォルダーの対応一覧">
+            <DataGrid x:Name="RestoreFoldersGrid" ItemsSource="{Binding SelectedProfile.RestoreFolders}" SelectedItem="{Binding SelectedRestoreEntry}" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" CanUserResizeRows="False" CanUserResizeColumns="True" ColumnHeaderStyle="{StaticResource FolderColumnHeader}" MinColumnWidth="200" HeadersVisibility="Column" RowHeaderWidth="0" RowHeight="44" Height="264" BorderBrush="#CBD5E1" BorderThickness="1" Background="White" GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#E2E8F0" SelectionMode="Single" SelectionUnit="FullRow" ScrollViewer.HorizontalScrollBarVisibility="Auto" AutomationProperties.Name="復元フォルダーの対応一覧">
               <DataGrid.CellStyle>
                 <Style TargetType="DataGridCell" BasedOn="{StaticResource {x:Type DataGridCell}}">
                   <Setter Property="Padding" Value="0"/>
@@ -93,6 +121,7 @@
                 </DataGridTemplateColumn>
               </DataGrid.Columns>
             </DataGrid>
+            <Thumb x:Name="RestoreFoldersResizeThumb" Style="{StaticResource FolderListResizeHandle}" AutomationProperties.Name="復元一覧の高さを変更" DragDelta="FolderListResize_DragDelta" PreviewKeyDown="FolderListResize_PreviewKeyDown" MouseDoubleClick="FolderListResize_MouseDoubleClick"/>
             <TextBlock Text="各行の復元元の中身を、同じ行の復元先へ順番に戻します。差分一覧の [番号] は行順です。" Style="{StaticResource Caption}" FontSize="10" Margin="0,4,0,0"/>
           </StackPanel>
           <TextBlock Grid.Row="2" Text="{Binding DestinationLabel}" VerticalAlignment="Center" Visibility="{Binding BackupSourcesVisibility}"/>
@@ -114,7 +143,7 @@
           <Border Background="White" CornerRadius="6" Padding="13,6"><StackPanel><TextBlock Text="コピー容量" Style="{StaticResource Caption}"/><TextBlock Text="{Binding TotalSize}" FontSize="22" FontWeight="SemiBold" Margin="0,3,0,0"/></StackPanel></Border>
         </UniformGrid>
       </Grid>
-      <Border Grid.Row="3" Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="8" Padding="10" MinHeight="130">
+      <Border x:Name="PreviewPanel" Grid.Row="3" Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="8" Padding="10" MinHeight="130">
         <TabControl Background="White" BorderThickness="0">
           <TabItem Header="  差分一覧  ">
             <Grid Margin="0,9,0,0">

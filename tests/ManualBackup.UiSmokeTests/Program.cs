@@ -7,6 +7,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Interop;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -146,6 +147,7 @@ internal static class Program
             Check(window.LogText.Contains("同時実行数: 4", StringComparison.Ordinal), "preview log reports the selected engine plan limit four");
             Check(combo.IsEnabled, "parallel control re-enables after preview");
 
+            VerifyBackupFolderLayouts(renderHost, window, first, fixture, snapshot);
             VerifyLayout(renderHost, combo, 980, 900);
             VerifyLayout(renderHost, combo, 1160, 1000);
             if (snapshot is not null)
@@ -346,6 +348,216 @@ internal static class Program
         Check(controls.Length >= 2 && controls.All(box => box.ActualWidth > 100), $"paired row destination editors render at {width} by {height}");
     }
 
+    private static void VerifyBackupFolderLayouts(FrameworkElement content, MainWindow window,
+        BackupProfile profile, string fixture, string? snapshot)
+    {
+        var grid = (DataGrid)window.FindName("SourceFoldersGrid");
+        var restoreGrid = (DataGrid)window.FindName("RestoreFoldersGrid");
+        var originalRows = profile.SourceFolders.ToArray();
+        var originalSelection = window.SelectedSourceEntry;
+        BackupSourceEntry LayoutSource(int index)
+        {
+            var source = Path.Combine(fixture, "backup-layout-source-" + index);
+            Directory.CreateDirectory(source);
+            File.WriteAllText(Path.Combine(source, "layout-preview.txt"), "Backup preview " + index);
+            return new BackupSourceEntry { SourcePath = source, TargetFolderName = "Layout-" + index };
+        }
+        void PreviewLayoutRows()
+        {
+            FlushBindings();
+            FindButton(content, button => BindingOperations.GetBindingExpression(button, IsEnabledProperty)?.ParentBinding.Path.Path == "CanRun")
+                .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            PumpUntil(() => !window.IsBusy, TimeSpan.FromSeconds(30));
+            Check(window.PreviewRows.Count == profile.SourceFolders.Count, "backup layout fixture has a real preview row for every source");
+        }
+        string? ImagePath(string suffix) => snapshot is null ? null : Path.ChangeExtension(snapshot, null) + suffix;
+        try
+        {
+            for (var index = profile.SourceFolders.Count; index < 5; index++) profile.SourceFolders.Add(LayoutSource(index));
+            PreviewLayoutRows();
+            VerifyBackupFolderLayout(content, grid, 964, 861, ImagePath("-backup-five-minimum.png"));
+            VerifyBackupFolderLayout(content, grid, 1144, 961, ImagePath("-backup-five.png"));
+
+            // Exercise the real DataGrid editing template, rather than only measuring its display text.
+            grid.SelectedItem = profile.SourceFolders[0];
+            grid.CurrentCell = new DataGridCellInfo(profile.SourceFolders[0], grid.Columns[0]);
+            Check(grid.BeginEdit(), "backup source path enters the real editing template");
+            FlushBindings(); content.UpdateLayout();
+            var editingRow = (DataGridRow)grid.ItemContainerGenerator.ContainerFromIndex(0);
+            var editor = VisualDescendants(editingRow).OfType<TextBox>().Single();
+            Check(editor.ActualHeight >= 28 && editor.ActualWidth > 100 && IsWithin(editor, editingRow),
+                "backup source path editor remains readable inside its row");
+            grid.CancelEdit(DataGridEditingUnit.Cell); grid.CancelEdit(DataGridEditingUnit.Row);
+
+            profile.SourceFolders.Add(LayoutSource(5));
+            PreviewLayoutRows();
+            VerifyBackupFolderLayout(content, grid, 964, 861, null);
+            grid.ScrollIntoView(profile.SourceFolders[^1]);
+            content.UpdateLayout(); FlushBindings();
+            var sixth = grid.ItemContainerGenerator.ContainerFromIndex(5) as DataGridRow;
+            Check(sixth is not null && IsWithin(sixth, RestoreViewport(grid)), "sixth backup source scrolls fully into view");
+
+            ArrangeForLayout(content, 1144, 961);
+            var backupThumb = (Thumb)window.FindName("BackupFoldersResizeThumb");
+            var restoreThumb = (Thumb)window.FindName("RestoreFoldersResizeThumb");
+            Check(backupThumb.ActualHeight >= 8 && backupThumb.ActualWidth > 100 && IsWithin(backupThumb, content),
+                "backup list exposes a visible draggable height handle");
+            var backupDefault = grid.Height;
+            var restoreDefault = restoreGrid.Height;
+            DragHandle(backupThumb, 64);
+            ArrangeForLayout(content, 1144, 961);
+            Check(grid.Height > backupDefault + 20, "dragging the backup handle enlarges the folder list");
+            Check(IsWithin((DataGridRow)grid.ItemContainerGenerator.ContainerFromIndex(5), RestoreViewport(grid)),
+                "expanded backup list can display its sixth source without compression");
+            VerifyWorkArea(content, "expanded backup list");
+            if (ImagePath("-backup-expanded.png") is { } expandedImage) Render(content, expandedImage, 1144, 961);
+            var expandedBackup = grid.Height;
+
+            window.IsRestore = true;
+            FlushBindings(); ArrangeForLayout(content, 1144, 961);
+            Check(Math.Abs(restoreGrid.Height - restoreDefault) < 0.5, "backup resizing leaves the restore list height independent");
+            Check(restoreThumb.ActualHeight >= 8 && restoreThumb.ActualWidth > 100 && IsWithin(restoreThumb, content),
+                "restore list exposes its own draggable height handle");
+            DragHandle(restoreThumb, 48);
+            ArrangeForLayout(content, 1144, 961);
+            Check(restoreGrid.Height > restoreDefault + 10, "dragging the restore handle enlarges its folder list");
+            VerifyWorkArea(content, "expanded restore list");
+            if (ImagePath("-restore-expanded.png") is { } restoreImage) Render(content, restoreImage, 1144, 961);
+            PressHandleKey(restoreThumb, Key.Home);
+            ArrangeForLayout(content, 1144, 961);
+            Equal(restoreDefault, restoreGrid.Height, "Home restores the restore list's standard height");
+            ResizeFirstColumn(restoreGrid, content, "restore");
+
+            window.IsBackup = true;
+            FlushBindings(); ArrangeForLayout(content, 1144, 961);
+            Check(Math.Abs(grid.Height - expandedBackup) < 0.5, "switching modes retains the separately resized backup height");
+            PreviewLayoutRows();
+            PressHandleKey(backupThumb, Key.Up);
+            ArrangeForLayout(content, 1144, 961);
+            Check(grid.Height < expandedBackup, "keyboard Up reduces the backup list height");
+            PressHandleKey(backupThumb, Key.Home);
+            ArrangeForLayout(content, 1144, 961);
+            Equal(backupDefault, grid.Height, "Home restores the backup list's standard height");
+
+            DragHandle(backupThumb, 10000);
+            ArrangeForLayout(content, 1144, 961);
+            Check(grid.Height > backupDefault && double.IsFinite(grid.Height), "oversized drag is bounded to available space");
+            VerifyWorkArea(content, "maximum backup list size");
+            ArrangeForLayout(content, 964, 861);
+            VerifyWorkArea(content, "window shrunk after expanding backup list");
+            Check(grid.Height < expandedBackup, "window shrink reduces a previously expanded list to keep the preview visible");
+            DragHandle(backupThumb, -10000);
+            ArrangeForLayout(content, 964, 861);
+            Check(grid.ActualHeight >= 140 && grid.ActualHeight < backupDefault, "upward drag preserves several readable rows at its minimum");
+            VerifyWorkArea(content, "minimum backup list size");
+            backupThumb.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+                { RoutedEvent = Control.MouseDoubleClickEvent });
+            ArrangeForLayout(content, 1144, 961);
+            Equal(backupDefault, grid.Height, "double-click restores the backup list's standard height");
+
+            // Header grippers run WPF's normal column-resize handlers.
+            Check(grid.CanUserResizeColumns && restoreGrid.CanUserResizeColumns, "both folder tables allow horizontal column resizing");
+            ResizeFirstColumn(grid, content, "backup");
+        }
+        finally
+        {
+            window.IsBackup = true;
+            profile.SourceFolders.Clear();
+            foreach (var row in originalRows) profile.SourceFolders.Add(row);
+            window.SelectedSourceEntry = originalSelection;
+            FlushBindings();
+            ArrangeForLayout(content, 1160, 1000);
+            var backupThumb = (Thumb)window.FindName("BackupFoldersResizeThumb");
+            PressHandleKey(backupThumb, Key.Home);
+            ArrangeForLayout(content, 1160, 1000);
+        }
+    }
+
+    private static void VerifyBackupFolderLayout(FrameworkElement content, DataGrid grid, int width, int height, string? snapshot)
+    {
+        VisualDescendants(grid).OfType<ScrollViewer>().First().ScrollToTop();
+        ArrangeForLayout(content, width, height);
+        if (snapshot is not null) Render(content, snapshot, width, height);
+        var label = $"backup {width} by {height} with {grid.Items.Count} sources";
+        var rows = Enumerable.Range(0, 5).Select(index => grid.ItemContainerGenerator.ContainerFromIndex(index) as DataGridRow).ToArray();
+        Check(rows.All(row => row is not null && IsWithin(row, RestoreViewport(grid))), "five complete source rows are visible at " + label);
+        foreach (var row in rows.Cast<DataGridRow>())
+        {
+            var cells = VisualDescendants(row).OfType<DataGridCell>().ToArray();
+            Check(cells.Length == 2 && cells.All(cell => cell.ActualHeight >= 30 && IsWithin(cell, row)),
+                $"backup source {row.GetIndex() + 1} has two readable cells at {label}");
+        }
+        VerifyWorkArea(content, label);
+    }
+
+    private static void VerifyWorkArea(FrameworkElement content, string label)
+    {
+        var preview = VisualDescendants(content).OfType<DataGrid>().Single(candidate =>
+            BindingOperations.GetBindingExpression(candidate, ItemsControl.ItemsSourceProperty)?.ParentBinding.Path.Path == "PreviewRows");
+        var previewPanel = VisualAncestors(preview).OfType<Border>().First(border =>
+            Grid.GetRow(border) == 3 && VisualTreeHelper.GetParent(border) is Grid);
+        var progress = VisualDescendants(content).OfType<ProgressBar>().Single();
+        var footerPanel = VisualAncestors(progress).OfType<StackPanel>().First();
+        var previewBounds = previewPanel.TransformToAncestor(content).TransformBounds(new Rect(previewPanel.RenderSize));
+        var footerBounds = footerPanel.TransformToAncestor(content).TransformBounds(new Rect(footerPanel.RenderSize));
+        var slot = LayoutInformation.GetLayoutSlot(previewPanel);
+        Console.WriteLine($"EVIDENCE {label}: previewHeight={previewPanel.ActualHeight:F2}; slot={slot.Height:F2}; footerTop={footerBounds.Top:F2}");
+        Check(previewPanel.ActualHeight <= slot.Height + 0.5 && previewBounds.Bottom <= footerBounds.Top + 0.5,
+            "preview does not overlap the footer at " + label);
+        Check(IsWithin(FindButton(content, button => BindingOperations.GetBindingExpression(button, IsEnabledProperty)?.ParentBinding.Path.Path == "CanRun"), content) &&
+              IsWithin(FindButton(content, button => BindingOperations.GetBindingExpression(button, ContentControl.ContentProperty)?.ParentBinding.Path.Path == "RunButtonText"), content),
+            "work action buttons remain visible at " + label);
+        Check(IsWithin(footerPanel, content), "status and footer remain within the window at " + label);
+        if (preview.Items.Count > 0)
+        {
+            var row = preview.ItemContainerGenerator.ContainerFromIndex(0) as DataGridRow;
+            Check(row is not null && IsWithin(row, RestoreViewport(preview)), "a complete real preview row remains visible at " + label);
+        }
+    }
+
+    private static void ArrangeForLayout(FrameworkElement content, int width, int height)
+    {
+        content.Measure(new Size(width, height));
+        content.Arrange(new Rect(0, 0, width, height));
+        content.UpdateLayout(); FlushBindings(); content.UpdateLayout();
+    }
+
+    private static void DragHandle(Thumb thumb, double vertical)
+    {
+        thumb.RaiseEvent(new DragStartedEventArgs(0, 0) { RoutedEvent = Thumb.DragStartedEvent });
+        thumb.RaiseEvent(new DragDeltaEventArgs(0, vertical) { RoutedEvent = Thumb.DragDeltaEvent });
+        thumb.RaiseEvent(new DragCompletedEventArgs(0, vertical, false) { RoutedEvent = Thumb.DragCompletedEvent });
+    }
+
+    private static void PressHandleKey(Thumb thumb, Key key)
+    {
+        var source = PresentationSource.FromVisual(thumb) ?? throw new InvalidOperationException("Resize handle has no presentation source.");
+        thumb.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, source, Environment.TickCount, key) { RoutedEvent = Keyboard.PreviewKeyDownEvent });
+    }
+
+    private static void ResizeFirstColumn(DataGrid grid, FrameworkElement content, string label)
+    {
+        var original = grid.Columns.Select(column => column.Width).ToArray();
+        try
+        {
+            var header = VisualDescendants(grid).OfType<DataGridColumnHeader>().Single(candidate => candidate.Column == grid.Columns[0]);
+            var grip = (Thumb?)header.Template.FindName("PART_RightHeaderGripper", header)
+                ?? throw new InvalidOperationException("Column width gripper is missing.");
+            var before = grid.Columns[0].ActualWidth;
+            grip.RaiseEvent(new DragStartedEventArgs(0, 0) { RoutedEvent = Thumb.DragStartedEvent });
+            grip.RaiseEvent(new DragDeltaEventArgs(28, 0) { RoutedEvent = Thumb.DragDeltaEvent });
+            grip.RaiseEvent(new DragCompletedEventArgs(28, 0, false) { RoutedEvent = Thumb.DragCompletedEvent });
+            ArrangeForLayout(content, 1144, 961);
+            Check(grid.Columns[0].ActualWidth > before + 10, label + " header gripper changes the first column width");
+            VerifyWorkArea(content, label + " wider first column");
+        }
+        finally
+        {
+            for (var index = 0; index < original.Length; index++) grid.Columns[index].Width = original[index];
+            ArrangeForLayout(content, 1144, 961);
+        }
+    }
+
     private static void VerifyFivePairLayouts(FrameworkElement content, DataGrid grid, BackupProfile profile,
         MainWindow window, string fixture, string? snapshot)
     {
@@ -406,6 +618,28 @@ internal static class Program
             FlushBindings();
             var sixth = grid.ItemContainerGenerator.ContainerFromIndex(5) as DataGridRow;
             Check(sixth is not null && IsWithin(sixth, RestoreViewport(grid)), "sixth restore pair scrolls fully into view");
+
+            // Resizing must keep real reviewed rows usable, including the preview below the list.
+            ArrangeForLayout(content, 1144, 961);
+            var restoreThumb = (Thumb)window.FindName("RestoreFoldersResizeThumb");
+            var originalHeight = grid.Height;
+            try
+            {
+                DragHandle(restoreThumb, 48);
+                ArrangeForLayout(content, 1144, 961);
+                VisualDescendants(grid).OfType<ScrollViewer>().First().ScrollToTop();
+                content.UpdateLayout(); FlushBindings();
+                Check(grid.Height > originalHeight + 10 && Enumerable.Range(0, 6).All(index =>
+                        grid.ItemContainerGenerator.ContainerFromIndex(index) is DataGridRow row && IsWithin(row, RestoreViewport(grid))),
+                    "expanded restore list displays six complete editable pairs");
+                VerifyWorkArea(content, "expanded restore list with six reviewed pairs");
+                if (snapshot is not null) Render(content, Path.ChangeExtension(snapshot, null) + "-restore-expanded.png", 1144, 961);
+            }
+            finally
+            {
+                PressHandleKey(restoreThumb, Key.Home);
+                ArrangeForLayout(content, 1144, 961);
+            }
         }
         finally
         {
