@@ -8,11 +8,13 @@
 
 | 対象 | 結果 | 範囲 |
 | --- | --- | --- |
-| 統合テスト | 54成功・0失敗・2スキップ | 従来47件に、複数組の内容照合・同名ファイルの分離・全組の事前検証・パス重複拒否・中止・全復元先の排他・エラー時の後続停止の7件を追加 |
+| 統合テスト | 61成功・0失敗・2スキップ | 従来47件に、複数組の復元7件と、上書き時の再試行・元ファイル保護7件を追加 |
 | 設定テスト | 18成功・0失敗 | 旧復元パスから1組への移行、対応一覧の保存、全行削除後の非復活、不正項目の検出を含む |
 | WPF内部連携・描画 | 73項目成功・Dispatcher例外0件 | 組の追加・削除・設定からの取込、複数組の差分確認、編集時の再確認、全組の確認画面データ、980×900・1160×1000の配置 |
 
 実ファイルでは、2組の同名ファイル、サイズと日時が同じで内容だけ異なるファイル、空フォルダー、復元先だけのファイル、全組の進捗集計と再実行0件を確認しました。後半の組の復元元・復元先を差分確認後に変更した場合、前半にも書き込まないことを確認しています。実行中の中止では完了済みの組を残し、処理中の既存ファイルと一時ファイルの扱いも検証しました。
+
+ダミーデータ検証でWindowsの一時的な置換エラー1175を再現したため、復元上書きに再試行と元ファイルの退避・回復を追加しました。実ファイルのロック継続・解除・待機中止、再試行中の復元元・復元先・一時ファイルの内容変更を検証しました。OSの置換処理をテスト内で差し替え、1176相当の元ファイル保持、1177相当の元ファイル回復、回復直前に新しい復元先が現れた場合の非上書きと退避先表示も確認しています。
 
 WPFの73項目は内部連携の検証です。別途、配布EXEのデスクトップ画面でも専用のダミーデータを使い、3組の差分確認、全組の確認表示、キャンセル後の未変更、追加3件・上書き3件・変更なし3件の復元を確認しました。復元後の9件はSHA-256で一致し、空フォルダーと復元先だけの3件も保持されました。
 
@@ -82,6 +84,7 @@ WPFの73項目は内部連携の検証です。別途、配布EXEのデスクト
 | .NET 10移行の集計 | `artifacts/net10-migration-validation.json` |
 | .NET 10での実ファイル負荷検証 | `artifacts/net10-load-validation.json`、`artifacts/net10-load-validation.md` |
 | 1.4.0の3組・1万件復元と配布EXE操作 | `artifacts/paired-restore-validation.json`、`artifacts/paired-restore-validation.md`、`artifacts/paired-restore-gui-validation.json` |
+| 1.4.0の置換失敗時の保護と再検証 | `artifacts/replacement-fix-tests.log`、`artifacts/paired-restore-final-validation.log` |
 | .NET 10のWPF連携と単一EXE | `artifacts/net10-ui-validation.log`、`artifacts/net10-portable-validation.json` |
 | 初期版の実ファイル検証 | `artifacts/load-validation.json`、`artifacts/load-validation.md`、`artifacts/gui-load-validation.json` |
 | 復元・複数コピー元・並列処理 | `artifacts/restore-validation.json`、`artifacts/multi-source-validation.json`、`artifacts/parallel-validation.json` |

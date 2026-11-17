@@ -95,6 +95,7 @@ try
             plan.UnchangedFiles == 9970 && plan.SkippedPaths.Count == 0, "exact delta including same-metadata edits");
         for (var row = 0; row < 3; row++) Check(Inventory(pairs[row].DestinationPath).OrderBy(p => p.Key).SequenceEqual(before[row].OrderBy(p => p.Key)), "preview leaves data unchanged");
         var result = await restore.ExecuteAsync(plan);
+        Console.WriteLine("DELTA_RESULT " + JsonSerializer.Serialize(result));
         Check(result.Success && result.CopiedFiles == 30, "delta restore result");
         for (var row = 0; row < 3; row++) Verify(pairs[row].DestinationPath, snapshots[row], directories[row], extras[row]);
         var repeat = await restore.CreatePlanAsync(pairs);
@@ -113,10 +114,12 @@ try
         var savedTime = File.GetLastWriteTimeUtc(lastSource);
         Edit(lastSource, true);
         var result = await restore.ExecuteAsync(plan);
+        Console.WriteLine("REJECTION_RESULT " + JsonSerializer.Serialize(result));
         Check(!result.Success && result.CopiedFiles == 0 && result.Errors.Any(issue => issue.RelativePath.StartsWith("[3]", StringComparison.Ordinal)), "late source change rejects complete batch");
         Check(ReadSnapshot(firstTarget) == unchangedEarlierTarget, "earlier target never written");
         File.WriteAllBytes(lastSource, savedBytes); File.SetLastWriteTimeUtc(lastSource, savedTime);
         var repaired = await restore.ExecuteAsync(await restore.CreatePlanAsync(pairs));
+        Console.WriteLine("REPAIR_RESULT " + JsonSerializer.Serialize(repaired));
         Check(repaired.Success && repaired.CopiedFiles == 1, "fresh preview restores pending update");
         for (var row = 0; row < 3; row++) Verify(pairs[row].DestinationPath, snapshots[row], directories[row], extras[row]);
         Check(!Directory.GetFiles(root, ".manualbackup-*.tmp", SearchOption.AllDirectories).Any(), "no staging leftovers");

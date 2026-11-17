@@ -270,6 +270,7 @@ public sealed partial class BackupEngine
         EnsureNoReparseAncestors(parent);
         var temporaryPath = Path.Combine(parent, ".manualbackup-" + Guid.NewGuid().ToString("N") + ".tmp");
         byte[]? buffer = null;
+        var replacementOwnsTemporary = false;
         try
         {
             // ShareRead prevents normal Windows writers from modifying this file while it is copied.
@@ -308,7 +309,10 @@ public sealed partial class BackupEngine
                 ValidateSnapshot(file.DestinationPath, contentState.Destination, token);
             token.ThrowIfCancellationRequested();
             if (contentState is not null && contentState.Destination.Exists)
-                File.Replace(temporaryPath, file.DestinationPath, null, ignoreMetadataErrors: true);
+            {
+                replacementOwnsTemporary = true;
+                ReplaceReviewedFile(temporaryPath, file, contentState, token);
+            }
             else
                 File.Move(temporaryPath, file.DestinationPath,
                     overwrite: contentState is null && file.Kind == BackupChangeKind.Updated);
@@ -317,9 +321,98 @@ public sealed partial class BackupEngine
         {
             if (buffer != null) ArrayPool<byte>.Shared.Return(buffer);
             // Only this invocation's staging file can be removed, never an existing backup.
-            try { File.Delete(temporaryPath); }
+            try { if (!replacementOwnsTemporary) File.Delete(temporaryPath); }
             catch (Exception exception) when (IsFileSystemError(exception)) { }
         }
+    }
+
+    // File.Replace can fail after renaming the original. Keep a same-directory
+    // original backup until commit succeeds, and never retry an uncertain state.
+    internal static void ReplaceReviewedFile(string temporaryPath, BackupFile file, ContentFileState state,
+        CancellationToken token, Action<string, string, string>? replace = null)
+    {
+        var originalBackup = Path.Combine(Path.GetDirectoryName(file.DestinationPath)!,
+            ".manualbackup-original-" + Guid.NewGuid().ToString("N") + ".bak");
+        var committed = false;
+        var retainStaging = false;
+        replace ??= static (staging, destination, original) => File.Replace(staging, destination, original, ignoreMetadataErrors: true);
+        try
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                token.ThrowIfCancellationRequested();
+                EnsureNoReparseAncestors(file.SourcePath);
+                EnsureNoReparseAncestors(file.DestinationPath);
+                EnsureNoReparseAncestors(temporaryPath);
+                EnsureNoReparseAncestors(originalBackup);
+                ValidateSnapshot(file.SourcePath, state.Source, token);
+                ValidateSnapshot(file.DestinationPath, state.Destination, token);
+                ValidateSnapshot(temporaryPath, state.Source, token);
+                if (EntryExists(originalBackup))
+                    throw new IOException("元ファイルの退避先が既に存在するため、置換を中止しました。");
+                try
+                {
+                    replace(temporaryPath, file.DestinationPath, originalBackup);
+                    committed = true;
+                    return;
+                }
+                catch (IOException exception)
+                {
+                    var code = exception.HResult & 0xffff;
+                    // 32/33/1175 retain both original names. 1176/1177 can
+                    // change names and must be recovered rather than retried.
+                    if (!OperatingSystem.IsWindows() || attempt >= 3 || code is not (32 or 33 or 1175) || EntryExists(originalBackup))
+                        throw;
+                    if (token.WaitHandle.WaitOne((attempt + 1) * 100)) token.ThrowIfCancellationRequested();
+                }
+            }
+        }
+        catch (Exception exception) when (IsFileSystemError(exception))
+        {
+            retainStaging = (exception.HResult & 0xffff) is 1176 or 1177;
+            // Repair an absent destination from our own verified original only.
+            // A new destination wins the race; no recovery operation overwrites it.
+            try
+            {
+                EnsureNoReparseAncestors(originalBackup);
+                EnsureNoReparseAncestors(file.DestinationPath);
+                if (EntryExists(originalBackup) && !EntryExists(file.DestinationPath))
+                {
+                    ValidateSnapshot(originalBackup, state.Destination, CancellationToken.None);
+                    File.Move(originalBackup, file.DestinationPath, overwrite: false);
+                }
+            }
+            catch (Exception recoveryException) when (IsFileSystemError(recoveryException)) { }
+            var retained = new List<string>();
+            // Include known recovery paths even when permissions prevent inspection.
+            try { if (EntryExists(originalBackup)) retained.Add(originalBackup); }
+            catch (Exception inspectionException) when (IsFileSystemError(inspectionException)) { retained.Add(originalBackup); }
+            if (retainStaging) retained.Add(temporaryPath);
+            if (retained.Count > 0)
+                throw new IOException(exception.Message + " 回復用ファイルを保持しました: " + string.Join(" / ", retained), exception);
+            throw;
+        }
+        finally
+        {
+            // A failed replacement must never discard its original backup.
+            if (committed)
+            {
+                try { File.Delete(originalBackup); }
+                catch (Exception exception) when (IsFileSystemError(exception)) { }
+            }
+            if (!retainStaging)
+            {
+                try { File.Delete(temporaryPath); }
+                catch (Exception exception) when (IsFileSystemError(exception)) { }
+            }
+        }
+    }
+
+    private static bool EntryExists(string path)
+    {
+        try { _ = File.GetAttributes(path); return true; }
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException) { return false; }
     }
 
     internal static (string Source, string Destination) ValidateRoots(string sourcePath, string destinationPath)
