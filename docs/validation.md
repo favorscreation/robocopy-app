@@ -25,6 +25,9 @@ WPFの73項目は内部連携の検証です。別途、配布EXEのデスクト
 - 3つのコピー元を並列数2でバックアップし、全1万件のパス・SHA-256・サイズ・更新日時とフォルダー構成が一致。再確認のコピー対象は0件。
 - 1対1で指定した3組に全1万件・1GiBを復元し、全件のSHA-256・サイズ・更新日時、空フォルダーを照合。再確認のコピー対象は0件。
 - 復元先の欠落10件と内容変更20件だけを復元。変更20件のうち10件はサイズ・更新日時を維持した変更です。復元先だけの3件を保持し、復元後の全1万件を再照合。再確認のコピー対象は0件。
+- 後半の組の復元元を確認後に変更すると、前半を含む全組の書き込みが0件で停止。元の内容に戻して差分を確認し直すと、残り1件だけを復元でき、全1万件の再照合も一致しました。
+
+置換失敗時の保護を修正した後、同じ1万件・1GiBの検証を最初から再実行し、全5段階が成功しました。配布EXEの3組の操作検証も修正後に再実行しています。
 
 別PC・NAS・ARM64の実機検証は行っていません。統合テストの2件のスキップは従来同様、ジャンクション作成の権限制限によるものです。
 
@@ -85,6 +88,7 @@ WPFの73項目は内部連携の検証です。別途、配布EXEのデスクト
 | .NET 10での実ファイル負荷検証 | `artifacts/net10-load-validation.json`、`artifacts/net10-load-validation.md` |
 | 1.4.0の3組・1万件復元と配布EXE操作 | `artifacts/paired-restore-validation.json`、`artifacts/paired-restore-validation.md`、`artifacts/paired-restore-gui-validation.json` |
 | 1.4.0の置換失敗時の保護と再検証 | `artifacts/replacement-fix-tests.log`、`artifacts/paired-restore-final-validation.log` |
+| 1.4.0リリース添付の集約レポート | `artifacts/BackupDesk-1.4.0-validation.json`、`artifacts/BackupDesk-1.4.0-validation.md` |
 | .NET 10のWPF連携と単一EXE | `artifacts/net10-ui-validation.log`、`artifacts/net10-portable-validation.json` |
 | 初期版の実ファイル検証 | `artifacts/load-validation.json`、`artifacts/load-validation.md`、`artifacts/gui-load-validation.json` |
 | 復元・複数コピー元・並列処理 | `artifacts/restore-validation.json`、`artifacts/multi-source-validation.json`、`artifacts/parallel-validation.json` |
