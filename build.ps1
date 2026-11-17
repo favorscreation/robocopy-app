@@ -58,6 +58,10 @@ try {
     if (Test-Path -LiteralPath $readmePath) {
         Copy-Item -LiteralPath $readmePath -Destination (Join-Path $publishDirectory 'README.md') -Force
     }
+    $docsPath = Join-Path $projectRoot 'docs'
+    if (Test-Path -LiteralPath $docsPath -PathType Container) {
+        Copy-Item -LiteralPath $docsPath -Destination (Join-Path $publishDirectory 'docs') -Recurse -Force
+    }
     $licensePath = Join-Path $projectRoot 'THIRD-PARTY-NOTICES.txt'
     if (Test-Path -LiteralPath $licensePath) {
         Copy-Item -LiteralPath $licensePath -Destination (Join-Path $publishDirectory 'THIRD-PARTY-NOTICES.txt') -Force
