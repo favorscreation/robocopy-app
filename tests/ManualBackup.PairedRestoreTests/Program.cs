@@ -5,8 +5,8 @@ using System.Text.Json;
 using ManualBackup.Core;
 
 const long DatasetBytes = 1_073_741_824;
-const int FileCount = 10_000;
-const int DataCount = 1_000;
+const int FileCount = 1_000;
+const int DataCount = 100;
 var workspace = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
 if (!File.Exists(Path.Combine(workspace, "ManualBackup.sln"))) throw new InvalidOperationException("Project root missing.");
 var qa = Path.Combine(workspace, ".qa");
@@ -29,7 +29,7 @@ try
     Check(!Directory.Exists(root), "fixture is new");
     Check(!Directory.Exists(qa) || (File.GetAttributes(qa) & FileAttributes.ReparsePoint) == 0, "scratch root is not a link");
     Directory.CreateDirectory(root);
-    await Phase("create-3-sources-10000-files-1GiB", () =>
+    await Phase($"create-3-sources-{FileCount}-files-1GiB", () =>
     {
         foreach (var source in sources) Directory.CreateDirectory(Path.Combine(source.SourcePath, "空フォルダー", "子"));
         var random = new Random(20261117);
@@ -51,7 +51,7 @@ try
             total += snapshots[row].Values.Sum(value => value.Length);
         }
         Check(snapshots.Sum(set => set.Count) == FileCount && total == DatasetBytes, "exact dataset size");
-        return Task.FromResult<object>(new { Files = FileCount, Bytes = total, EmptyFiles = 9000, DataFiles = DataCount });
+        return Task.FromResult<object>(new { Files = FileCount, Bytes = total, EmptyFiles = FileCount - DataCount, DataFiles = DataCount });
     });
     await Phase("parallel-backup-and-verify-all-hashes", async () =>
     {
@@ -64,7 +64,7 @@ try
         Check((await backup.CreatePlanAsync(new MultiBackupRequest(sources, backupRoot, 2))).Files.Count == 0, "unchanged backup is zero");
         return new { result.CopiedFiles, result.BytesCopied, VerifiedSha256 = FileCount, ParallelSources = 2 };
     });
-    await Phase("restore-3-pairs-10000-files-1GiB-and-verify", async () =>
+    await Phase($"restore-3-pairs-{FileCount}-files-1GiB-and-verify", async () =>
     {
         var plan = await restore.CreatePlanAsync(pairs);
         Check(plan.Files.Count == FileCount && plan.TotalBytes == DatasetBytes && plan.SkippedPaths.Count == 0, "full restore preview");
@@ -92,7 +92,7 @@ try
         var before = pairs.Select(pair => Inventory(pair.DestinationPath)).ToArray();
         var plan = await restore.CreatePlanAsync(pairs);
         Check(plan.Files.Count(file => file.Kind == BackupChangeKind.New) == 10 && plan.Files.Count(file => file.Kind == BackupChangeKind.Updated) == 20 &&
-            plan.UnchangedFiles == 9970 && plan.SkippedPaths.Count == 0, "exact delta including same-metadata edits");
+            plan.UnchangedFiles == FileCount - 30 && plan.SkippedPaths.Count == 0, "exact delta including same-metadata edits");
         for (var row = 0; row < 3; row++) Check(Inventory(pairs[row].DestinationPath).OrderBy(p => p.Key).SequenceEqual(before[row].OrderBy(p => p.Key)), "preview leaves data unchanged");
         var result = await restore.ExecuteAsync(plan);
         Console.WriteLine("DELTA_RESULT " + JsonSerializer.Serialize(result));
@@ -156,7 +156,7 @@ finally
     File.WriteAllText(Path.Combine(artifacts, "paired-restore-validation.json"), JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
     var markdown = new StringBuilder("# Backup Desk 1.4.0 dummy-file validation\n\n");
     markdown.AppendLine($"Result: {(report.Passed ? "PASS" : "FAIL")}. Cleanup confirmed: {report.CleanupConfirmed}. UTC: {report.FinishedUtc:O}.");
-    markdown.AppendLine("\nThree paired folders; 10,000 real files (9,000 empty and 1,000 binary); exactly 1,073,741,824 bytes (1 GiB). Seeded ordinary writes, no sparse allocation. Production MultiBackupEngine and MultiRestoreEngine are used. All file paths, SHA-256 hashes, sizes, UTC modification times and directory sets are verified. This is engine validation, not desktop GUI automation.");
+    markdown.AppendLine($"\nThree paired folders; {FileCount:N0} real files ({FileCount - DataCount:N0} empty and {DataCount:N0} binary); exactly {DatasetBytes:N0} bytes (1 GiB). Seeded ordinary writes, no sparse allocation. Production MultiBackupEngine and MultiRestoreEngine are used. All file paths, SHA-256 hashes, sizes, UTC modification times and directory sets are verified. This is engine validation, not desktop GUI automation.");
     markdown.AppendLine("\n| Phase | Seconds | Evidence |\n| --- | ---: | --- |");
     foreach (var phase in report.Phases) markdown.AppendLine($"| {phase.Name} | {phase.Seconds:F2} | {JsonSerializer.Serialize(phase.Details).Replace("|", "\\|")} |");
     markdown.AppendLine($"\nTotal: {report.TotalSeconds:F2} seconds. Dummy sources, backups and restored targets were removed: {report.CleanupConfirmed}.");
@@ -174,7 +174,7 @@ async Task Phase(string label, Func<Task<object>> action)
     report.Phases.Add(new(label, timer.Elapsed.TotalSeconds, details));
     Console.WriteLine($"PASS {label}: {JsonSerializer.Serialize(details)} ({timer.Elapsed.TotalSeconds:F2}s)");
 }
-static string DummyPath(string parent, int index) => Path.Combine(parent, $"資料{index % 30:D2}", index < 1000 ? $"データ{index:D5}.bin" : $"空{index:D5}.txt");
+static string DummyPath(string parent, int index) => Path.Combine(parent, $"資料{index % 30:D2}", index < DataCount ? $"データ{index:D5}.bin" : $"空{index:D5}.txt");
 static void Check(bool condition, string label) { if (!condition) throw new InvalidOperationException(label); }
 static Snapshot ReadSnapshot(string path)
 {

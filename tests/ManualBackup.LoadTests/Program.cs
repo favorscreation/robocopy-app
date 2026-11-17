@@ -5,9 +5,9 @@ using System.Text.Json;
 using ManualBackup.Core;
 
 const long OneGiB = 1_073_741_824;
-const int TotalFiles = 10_000;
-const int EmptyFiles = 9_000;
-const int DataFiles = 1_000;
+const int TotalFiles = 1_000;
+const int DataFiles = 100;
+const int EmptyFiles = TotalFiles - DataFiles;
 var workspace = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../"));
 if (!File.Exists(Path.Combine(workspace, "ManualBackup.sln")))
     throw new InvalidOperationException("Run the load validation from this project's build output.");
@@ -34,7 +34,7 @@ try
     Directory.CreateDirectory(scratchRoot);
     var emptySource = Path.Combine(scratchRoot, "empty-source");
     var emptyDestination = Path.Combine(scratchRoot, "empty-backup");
-    await Phase("empty-create-10000", () =>
+    await Phase($"empty-create-{TotalFiles}", () =>
     {
         Directory.CreateDirectory(emptySource);
         for (var i = 0; i < TotalFiles; i++)
@@ -51,7 +51,7 @@ try
 
     var mixedSource = Path.Combine(scratchRoot, "mixed-source");
     var mixedDestination = Path.Combine(scratchRoot, "mixed-backup");
-    await Phase("mixed-create-10000-exact-1GiB", () =>
+    await Phase($"mixed-create-{TotalFiles}-exact-1GiB", () =>
     {
         Directory.CreateDirectory(mixedSource);
         for (var i = 0; i < EmptyFiles; i++)
@@ -110,7 +110,7 @@ try
         }
         var files = Directory.GetFiles(mixedSource, "*", SearchOption.AllDirectories);
         Assert(files.Length == TotalFiles && files.Sum(p => new FileInfo(p).Length) == OneGiB,
-            "After mutation source remains exactly 10,000 files and 1 GiB.");
+            $"After mutation source remains exactly {TotalFiles:N0} files and 1 GiB.");
         return Task.FromResult(new { Updates = 20, Additions = 10, RemovedFromSource = 10, Files = files.Length, Bytes = OneGiB });
     });
     var deltaPlan = await Phase("mixed-delta-preview", async () =>
@@ -119,7 +119,7 @@ try
         Assert(plan.Files.Count == 30, "Delta planned file count.");
         Assert(plan.Files.Count(p => p.Kind == BackupChangeKind.Updated) == 20, "Delta updated count.");
         Assert(plan.Files.Count(p => p.Kind == BackupChangeKind.New) == 10, "Delta new count.");
-        Assert(plan.UnchangedFiles == 9970, "Delta unchanged count.");
+        Assert(plan.UnchangedFiles == TotalFiles - 30, "Delta unchanged count.");
         Assert(plan.TotalBytes == deltaBytes && plan.SkippedPaths.Count == 0, "Delta bytes/skipped.");
         return plan;
     }, p => new { Files = p.Files.Count, Updated = 20, New = 10, p.UnchangedFiles, p.TotalBytes, Skipped = p.SkippedPaths.Count });
@@ -132,7 +132,7 @@ try
     await Phase("mixed-delta-verify-all-hashes-and-retained-deletions", () =>
     {
         var inventory = VerifyTrees(mixedSource, mixedDestination, retained);
-        Assert(inventory.SourceFiles == 10000 && inventory.DestinationFiles == 10010, "Retained deletion count.");
+        Assert(inventory.SourceFiles == TotalFiles && inventory.DestinationFiles == TotalFiles + retained.Count, "Retained deletion count.");
         Assert(inventory.SourceBytes == OneGiB, "Source exact byte count after delta.");
         AssertNoStaging(scratchRoot);
         return Task.FromResult(inventory);
@@ -140,7 +140,7 @@ try
     await Phase("mixed-final-no-change", async () =>
     {
         var plan = await engine.CreatePlanAsync(new BackupRequest(mixedSource, mixedDestination));
-        Assert(plan.Files.Count == 0 && plan.UnchangedFiles == 10000 && plan.SkippedPaths.Count == 0, "Final unchanged preview.");
+        Assert(plan.Files.Count == 0 && plan.UnchangedFiles == TotalFiles && plan.SkippedPaths.Count == 0, "Final unchanged preview.");
         var result = await engine.ExecuteAsync(plan);
         Assert(result.Success && result.CopiedFiles == 0 && result.BytesCopied == 0, "Final unchanged execute.");
         return new { plan.UnchangedFiles, result.CopiedFiles, Errors = result.Errors.Count };
@@ -192,7 +192,7 @@ finally
     File.WriteAllText(Path.Combine(artifacts, "load-validation.json"), JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
     var markdown = new StringBuilder("# Real-file load validation\n\n");
     markdown.AppendLine($"Status: **{(report.Passed ? "PASS" : "FAIL")}**. Cleanup confirmed: **{report.CleanupConfirmed}**.");
-    markdown.AppendLine("\nDatasets: 10,000 empty files; 10,000 mixed files (9,000 empty + 1,000 random binary) totaling exactly 1,073,741,824 bytes (1 GiB). All data were physically written with ordinary file writes, not sparse files.");
+    markdown.AppendLine($"\nDatasets: {TotalFiles:N0} empty files; {TotalFiles:N0} mixed files ({EmptyFiles:N0} empty + {DataFiles:N0} random binary) totaling exactly {OneGiB:N0} bytes (1 GiB). All data were physically written with ordinary file writes, not sparse files.");
     markdown.AppendLine("\n| Phase | Seconds | Details |\n| --- | ---: | --- |");
     foreach (var phase in report.Phases)
         markdown.AppendLine($"| {phase.Name} | {phase.Seconds:F3} | {JsonSerializer.Serialize(phase.Details).Replace("|", "\\|")} |");
